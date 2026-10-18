@@ -1,0 +1,35 @@
+{
+  "dataset_id": "coral-nlp/german-commons (config=web, split=wikipedia)",
+  "spacy_version": "3.8.16",
+  "spacy_model": "de_core_news_lg",
+  "n_docs": 1000,
+  "n_tokens_verb_and_other": 730506,
+  "n_distinct_verb_lemmas": 4415,
+  "results": {
+    "100": {
+      "available": true,
+      "n_available": 100,
+      "slope": -0.6180807347168658,
+      "intercept": 7.420352940402574,
+      "r2": 0.9531199505156696,
+      "se": 0.013846895663904003
+    },
+    "500": {
+      "available": true,
+      "n_available": 500,
+      "slope": -0.8653789391265793,
+      "intercept": 8.271476243452257,
+      "r2": 0.9751395742365265,
+      "se": 0.006191737560130726
+    },
+    "1000": {
+      "available": true,
+      "n_available": 1000,
+      "slope": -0.994252460562199,
+      "intercept": 8.870008398072383,
+      "r2": 0.9713108035212684,
+      "se": 0.005408931563491216
+    }
+  },
+  "fit_method": "OLS of log(frequency) on log(rank); slope reported as Zipf exponent beta=-slope"
+}
