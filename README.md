@@ -91,11 +91,18 @@ analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
   words/POS (each head projects a category and takes stopped left/right
   argument sequences), which is properly normalised with no partition
   function or depth bound.
+* **CYK parser** — `docs/cgel-headcyk.md` and `cgel_headcyk.py`: a
+  head-driven (Eisner/Collins-style) parser that builds each constituent
+  outward from its head using the split-head generative tables.  More than
+  doubles the labelled F1 of the MLE-PCFG baseline (`cgel_cyk.py`) with no
+  tuning; coverage is honestly partial (coordination/gaps).  A plain
+  MLE-PCFG CYK (`cgel_cyk.py`) is kept as the disposable baseline.
 
 ```
 python3 cgel_reader.py --validate cgel/*.cgel
 python3 cgel_conventions.py --check cgel/*.cgel
 python3 cgel_models.py --eval --structured --demo Here-sThePaper
 python3 cgel_splithead.py
-python3 tests/cgel_splithead.test.py && python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
+python3 cgel_headcyk.py --eval
+python3 tests/cgel_headcyk.test.py && python3 tests/cgel_splithead.test.py && python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
 ```
