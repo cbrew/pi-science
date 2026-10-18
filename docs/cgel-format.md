@@ -256,6 +256,9 @@ for s in corpus:
 * [`cgel-models.md`](cgel-models.md) — two probability models over the
   analyses: Model A (labels independent) and Model B (convention-conforming
   analyses only), plus generative structural models that also score tree shape.
+* [`cgel-splithead.md`](cgel-splithead.md) — a bottom-up, head-driven
+  (Eisner split-head) generative model built from words/POS, properly
+  normalised with no partition function or depth bound.
 * `cgel_conventions.py` — mechanical checker for those conventions.
 * `cgel_grammar.py` — the conventions as machine-readable tables (the license
   set used by the models).
