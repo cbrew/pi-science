@@ -86,10 +86,16 @@ analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
   convention-conforming analyses only, computed exactly by dynamic
   programming) — plus structural generative models that score tree shape as
   well as labels (`--structured`).
+* **Bottom-up split-head models** — `docs/cgel-splithead.md` and
+  `cgel_splithead.py`: an Eisner split-head generative model built up from
+  words/POS (each head projects a category and takes stopped left/right
+  argument sequences), which is properly normalised with no partition
+  function or depth bound.
 
 ```
 python3 cgel_reader.py --validate cgel/*.cgel
 python3 cgel_conventions.py --check cgel/*.cgel
 python3 cgel_models.py --eval --structured --demo Here-sThePaper
-python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
+python3 cgel_splithead.py
+python3 tests/cgel_splithead.test.py && python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
 ```
