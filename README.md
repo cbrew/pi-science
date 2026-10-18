@@ -67,3 +67,29 @@ The most important design choice is **validity-sensitive triage**. Scientific an
 ## License
 
 MIT.
+
+## CGEL treebank analysis
+
+An independent research deliverable (unrelated to the harness) that reads and
+analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
+
+* **Reader** — `cgel_reader.py`: a pure-stdlib parser for the `.cgel`
+  S-expression trees (220 sentences in `cgel/`), verified round-trip +
+  validation (2000+ node invariants, 0 mismatches).
+* **Conventions** — `docs/cgel-conventions.md` and `cgel_grammar.py`: the
+  discovered annotation conventions that couple function labels (edges) with
+  constituent labels (categories) — the X-bar/projection skeleton and the
+  head rule — with empirical tables and a mechanical checker
+  (`cgel_conventions.py`).
+* **Probability models** — `docs/cgel-models.md` and `cgel_models.py`: two
+  models over analyses — Model A (labels independent) and Model B (support =
+  convention-conforming analyses only, computed exactly by dynamic
+  programming) — plus structural generative models that score tree shape as
+  well as labels (`--structured`).
+
+```
+python3 cgel_reader.py --validate cgel/*.cgel
+python3 cgel_conventions.py --check cgel/*.cgel
+python3 cgel_models.py --eval --structured --demo Here-sThePaper
+python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
+```
