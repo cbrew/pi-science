@@ -1,0 +1,21 @@
+Investigate Zipf's law for German verb lemmas.
+
+**Corpus:** Hugging Face `coral-nlp/german-commons`, configuration `web`, split `wikipedia`.
+
+**Research question:** How does the estimated rank–frequency exponent change when restricted to the 100, 500, and 1,000 most frequent German verb lemmas?
+
+Use exploratory scientific mode.
+
+**Procedure**
+1. Stream the first 1,000 nonempty Wikipedia documents. Do not download the entire corpus.
+2. Use spaCy `de_core_news_lg` for tokenization, POS tagging, and lemmatization. Count tokens tagged `VERB`, excluding `AUX`.
+3. Rank verb lemmas by observed frequency.
+4. Estimate the Zipf exponent by ordinary least squares on log(rank) versus log(frequency), separately for ranks 1–100, 1–500, and 1–1,000.
+5. Produce one log–log plot showing the observations and fitted lines.
+6. Report the three exponents, the number of tokens and distinct verb lemmas, and a concise interpretation.
+
+Record the dataset identifier, model version, sampling procedure, and limitations.
+
+If there are fewer than 1,000 distinct verb lemmas, state this and report what can be estimated rather than silently expanding the sample.
+
+**Constraints:** Write the minimum code necessary. No infrastructure work, package development, refactoring, or unrelated tests. Do not investigate alternative corpora. Stop when the scientific question has been answered.
