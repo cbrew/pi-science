@@ -132,6 +132,12 @@ ROOT_CATS = frozenset({"Clause", "Coordination", "NP", "VP", "Nom", "AdjP"})
 # the categories a tree may be rooted in: the six observed in the treebank
 # (Clause 167, Coordination 34, NP 16, VP, Nom, AdjP once each)
 MAXGAP = 2
+# evaluation length bound: sentences longer than this are not parsed and are
+# reported as excluded.  The chart's gap-binder state product makes the two
+# longest sentences (34 and 36 tokens) infeasible; the author chose to keep
+# two open gaps (the wh-question-plus-inversion construction) and exclude
+# those two sentences until the chart is rebuilt (design document §9).
+MAXTOK = 32
 NOGAPS: Tuple[str, ...] = ()
 # functions a head takes at most once.  The treebank never repeats Subj,
 # Det, Obj, Obj_ind, Obj_dir, PredComp, DisplacedSubj, ExtraposedSubj,
@@ -1186,9 +1192,16 @@ def _gap_sites(root: Node) -> List[Tuple[str, str]]:
             if n.cat == GAP]
 
 
-def evaluate(sentences, g: Grammar, maxgap: int = MAXGAP, **sw) -> list:
+def evaluate(sentences, g: Grammar, maxgap: int = MAXGAP, maxtok: int = MAXTOK,
+             **sw) -> list:
+    """One row per sentence; a sentence over ``maxtok`` tokens is not parsed
+    and its row says ``excluded``."""
     rows = []
     for s in sentences:
+        if len(sentence_tokens(s)) > maxtok:
+            rows.append({"id": s.sent_id, "kind": _kind(s), "parsed": False,
+                         "excluded": True})
+            continue
         gold = _brackets(s.root)
         pr = parse(g, sentence_tokens(s), sentence_words(s), maxgap, **sw)
         row = {"id": s.sent_id, "kind": _kind(s), "parsed": pr is not None}
@@ -1218,6 +1231,7 @@ def evaluate(sentences, g: Grammar, maxgap: int = MAXGAP, **sw) -> list:
 
 def summarize(rows, label: str) -> str:
     ok = [r for r in rows if r["parsed"]]
+    excluded = sum(1 for r in rows if r.get("excluded"))
     dn = sum(r.get("dep_n", 0) for r in ok)
     las = sum(r.get("las", 0) for r in ok) / dn if dn else 0.0
     uas = sum(r.get("uas", 0) for r in ok) / dn if dn else 0.0
@@ -1231,7 +1245,8 @@ def summarize(rows, label: str) -> str:
     gg = sum(r.get("gap_gold", 0) for r in ok)
     gf = sum(r.get("gap_filled", 0) for r in ok)
     gp = sum(r.get("gap_parent", 0) for r in ok)
-    out = [f"{label}: parsed={len(ok)}/{len(rows)}  "
+    out = [f"{label}: parsed={len(ok)}/{len(rows) - excluded}"
+           + (f" ({excluded} excluded over {MAXTOK} tokens)" if excluded else "") + "  "
            f"LAS={las:.3f}  UAS={uas:.3f}  collapsed-bracket-F1={colf1:.3f}  "
            f"coordination-brackets={ch}/{cg}  "
            f"gaps filled with the gold material={gf}/{gg}  "

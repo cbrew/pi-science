@@ -349,13 +349,25 @@ just before) and smaller cells; the chains at `F` use `arg` of footprint
 `≤ F` (computed earlier in the same iteration) and chains of smaller
 footprint.
 
-### 5.5 Complexity
+### 5.5 Complexity, and the length bound
 
 Per footprint the work is cubic in `n` times the number of key pairs
-examined per cell.  Keys multiply with the gap tuples, so sentences with
-several gap tokens are the slow ones: the 36-token right-node-raising
-sentence takes about 15 s, the median sentence well under 0.1 s, the
-whole corpus a few minutes per configuration.  The tests restrict
+examined per cell, and the keys are a product: category × open gaps (up
+to two, from eight categories: 45 tuples) × pending binders (28 tuples)
+× once-only state × coordination member sets.  On the 32-token
+right-node-raising sentence a single right-chain cell holds 4,400 keys
+and the chart 344,000, in about a minute; the 34- and 36-token sentences
+do not finish.  Two structural rules keep it there rather than worse:
+CGEL's coordination condition is applied when a coordination is formed,
+not only when it is attached, and the never-repeated binder functions
+`Postnucleus` and `Head-Prenucleus` are once-only.
+
+The author's decision (October 2026): keep two open gaps, because the 19
+heads that need them are a real construction (wh-question with
+subject–auxiliary inversion), and **exclude sentences over 32 tokens
+from evaluation** (two of 220, reported as excluded in every summary)
+until the chart is rebuilt on the active-chart design (§9a), where the
+gap state can be made cleverer in the label.  The tests restrict
 corpus-wide checks to sentences of at most 12 tokens.
 
 ## 6. Reconstruction (`_Rebuilder`)
@@ -529,6 +541,21 @@ recorded edges; training is therefore restricted to sentences of at most
 Result (5-fold CV, 12 epochs): LAS 0.506 → 0.523, UAS 0.572 → 0.592,
 coordination brackets 47 → 52 of 129, gaps filled 14 → 19 of 119.
 
+### 9a. The chart to come
+
+The present chart (five parallel span grids of dicts, positional tuple
+keys, rule-specific backpointers, an edge list for the outside pass) is
+to be replaced by the active-chart organisation: an edge is `(id, label,
+start, end, needed)`, deduplicated as a set member; scores and backtraces
+are tables keyed by id; completed edges are indexed by start and partial
+edges by the boundary they grow at, so the fundamental rule is an array
+lookup; and all state lives in the label (a category record with its
+features, the gap state, the pending binders, the once-only functions),
+where a field earns its place by a rule that reads it.  Viterbi, inside
+and outside become three folds over the same derivation table.  The
+acceptance test is identity with the numbers in the note on the
+sentences the length bound admits.
+
 ## 10. Switches
 
 | switch | where | default | effect |
@@ -538,6 +565,7 @@ coordination brackets 47 → 52 of 129, gaps filled 14 → 19 of 119.
 | `coord` | `parse` | `True` | COORD rule on/off |
 | `slash` | `parse` | `True` | gap tuples kept/zeroed (gaps become plain tokens) |
 | `once`, `finite`, `license` | `parse` | `True` | the structural rules of §5.3 **Attach** |
+| `maxtok` | `evaluate` | 32 | sentences longer than this are reported as excluded, not parsed (§5.5) |
 | `alpha` | `build_grammar` | 1.0 | smoothing of the initial weights |
 | `--maxtok`, `--epochs`, `--lr`, `--l2` | `cgel_coordgap_fit.py --fit` | 16, 10, 0.05, 0.1 | training-set length bound, epochs, Adam step, L2 pull towards the start |
 
