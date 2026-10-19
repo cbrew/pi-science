@@ -392,26 +392,48 @@ edge is popped, the score of a tail is final when a derivation is
 scored, and Viterbi (`max`), inside (`sum`) and outside (the reverse of
 `derivs`) are three folds over the same derivation table.
 
-### 5.5 Complexity, and the length bound
+### 5.5 Ties
 
-Per footprint the work is cubic in `n` times the number of key pairs
-examined per cell, and the keys are a product: category × open gaps (up
-to two, from eight categories: 45 tuples) × pending binders (28 tuples)
-× once-only state × coordination member sets.  On the 32-token
-right-node-raising sentence a single right-chain cell holds 4,400 keys
-and the chart 344,000, in about a minute; the 34- and 36-token sentences
-do not finish.  Two structural rules keep it there rather than worse:
-CGEL's coordination condition is applied when a coordination is formed,
-not only when it is attached, and the never-repeated binder functions
-`Postnucleus` and `Head-Prenucleus` are once-only.
+The features cannot tell a dependent attached to a head from the same
+dependent attached inside that head's complement when both heads project
+the same category: the `dep` feature names the head's category (`VP`),
+not its class, and the complement's own features are unchanged by what
+is attached inside it.  So *the preface was written [by Sue]* has two
+Viterbi trees with exactly the same score, the PP on *was* or on
+*written*, and 86 of the 218 sentences have such a tie.  The first chart
+broke them by loop order; the active chart breaks them by a stated rule
+(`Chart.prefer`): between two derivations of an edge with equal scores,
+attach a dependent as low as possible, that is, prefer the derivation
+whose dependent is the larger, so that the material goes inside the
+nearer constituent (late closure, Kimball's right association).  Ties
+between derivations of other rules keep the first found.  The rule is a
+default where the model is silent, not a feature; the remedy is a feature
+that sees the head's class (lexicalised valency), which is step 9.
+
+### 5.6 Complexity, and the length bound
+
+The work is cubic in `n` times the number of edge pairs examined per
+position, and the labels are a product: category × open gaps (up to two,
+from eight categories: 45 tuples) × pending binders (28 tuples) ×
+once-only state × coordination member sets.  On the 32-token
+right-node-raising sentence the chart holds 307,000 edges (the first
+chart's grids held 344,000 keys; the difference is the pending binders no
+gap can match, now pruned) in about two minutes and 240 MB; the 34- and
+36-token sentences do not finish.  Two structural rules keep it there
+rather than worse: CGEL's coordination condition is applied when a
+coordination is formed, not only when it is attached, and the
+never-repeated binder functions `Postnucleus` and `Head-Prenucleus` are
+once-only.
 
 The author's decision (October 2026): keep two open gaps, because the 19
 heads that need them are a real construction (wh-question with
 subject–auxiliary inversion), and **exclude sentences over 32 tokens
 from evaluation** (two of 220, reported as excluded in every summary)
-until the chart is rebuilt on the active-chart design (§9a), where the
-gap state can be made cleverer in the label.  The tests restrict
-corpus-wide checks to sentences of at most 12 tokens.
+until the gap state is made cleverer in the label (binding each open gap
+to its candidate binder when the binder is attached, so that the gap and
+binder tuples stop multiplying), which the active chart now makes a
+change to `Label` and `attach` alone.  The tests restrict corpus-wide
+checks to sentences of at most 12 tokens.
 
 ## 6. Reconstruction (`_Rebuilder`)
 
@@ -611,7 +633,7 @@ tie exactly (§5.5).  The held-out numbers are in the note, §8.
 | `coord` | `parse` | `True` | COORD rule on/off |
 | `slash` | `parse` | `True` | gap tuples kept/zeroed (gaps become plain tokens) |
 | `once`, `finite`, `license` | `parse` | `True` | the structural rules of §5.3 **Attach** |
-| `maxtok` | `evaluate` | 32 | sentences longer than this are reported as excluded, not parsed (§5.5) |
+| `maxtok` | `evaluate` | 32 | sentences longer than this are reported as excluded, not parsed (§5.6) |
 | `alpha` | `build_grammar` | 1.0 | smoothing of the initial weights |
 | `--maxtok`, `--epochs`, `--lr`, `--l2` | `cgel_coordgap_fit.py --fit` | 16, 10, 0.05, 0.1 | training-set length bound, epochs, Adam step, L2 pull towards the start |
 

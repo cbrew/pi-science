@@ -667,6 +667,7 @@ LEFT, RIGHT, COMPLETE, CONJ, TAIL = "L", "R", "complete", "conj", "tail"
 # constituent before the conjunct it becomes, a conjunct before the tail it
 # ends.  Every other derivation has strictly smaller tails.
 RANK = {RIGHT: 0, COMPLETE: 1, LEFT: 2, CONJ: 3, TAIL: 4}
+TIE = 1e-9          # two scores this close are a tie (see Chart.prefer)
 
 
 class Edge(NamedTuple):
@@ -743,12 +744,28 @@ class Chart:
             self.back.append(how)
             heapq.heappush(self.agenda, (end - start, RANK[needed], eid))
         elif self.mode == "max":
-            if val > self.score[eid]:
+            cur = self.score[eid]
+            if val > cur + TIE or (val >= cur - TIE and self.prefer(how, self.back[eid])):
                 self.score[eid], self.back[eid] = val, how
         else:
             self.score[eid] = _logaddexp(self.score[eid], val)
         if self.record:
             self.derivs.append((eid, tails, feats))
+
+    def prefer(self, new: tuple, old: tuple) -> bool:
+        """The tie-break between two derivations of equal score: attach a
+        dependent as low as possible (late closure), that is, prefer the
+        derivation whose dependent is the larger, so that the material
+        goes inside the nearer constituent rather than onto the higher
+        head.  The features cannot tell the two apart (the ``dep`` feature
+        names the head's category, not its class), and 86 of the 218
+        sentences have such a tie; otherwise the first derivation found
+        stands."""
+        if new[0] == "attach" and old[0] == "attach":
+            edges = self.edges
+            dn, do = edges[new[3]], edges[old[3]]
+            return dn.end - dn.start > do.end - do.start
+        return False
 
     def mark_feature(self, kind: str, word: Optional[str], X: str):
         f = ("mark", kind, word, X)

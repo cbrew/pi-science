@@ -273,7 +273,7 @@ Numbers below are on the corrected chart (`cgel-correction-plan.md`:
 finiteness classes, the once-only, finite-subject and complement-licensing
 rules, CGEL's coordination condition), five-fold cross-validation, on the
 218 sentences of at most 32 tokens; the two longer ones are excluded by the
-author's decision and reported as such (design document §5.5).
+author's decision and reported as such (design document §5.6).
 
 ```
                                         parsed   LAS    UAS   collapsed  coord.    gaps filled
