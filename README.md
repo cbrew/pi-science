@@ -101,13 +101,15 @@ analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
   each gap is co-indexed with the material
   that fills it (`fill_gaps`).  Gap positions are taken from the input.
   Evaluated by labelled attachment (LAS), collapsed brackets and gap
-  filling: coverage 218/220, LAS 0.51, UAS 0.57, collapsed-bracket F1
-  0.59, the gold material copied into 15 of 119 gaps, all under 5-fold
-  CV.  `cgel_coordgap_fit.py` is Model B over the chart: a conditional
-  log-linear model normalised over the chart's own analyses (inside and
-  outside passes, exact expectations) and fitted by conditional maximum
-  likelihood; fitting on short sentences lifts held-out LAS to 0.52 and
-  gaps filled to 19 of 119.
+  filling, five-fold CV on the 218 sentences of at most 32 tokens: LAS
+  0.53 at relative-frequency weights, 0.58 fitted; gaps filled with the
+  gold material 29, fitted 40, of 117.  `cgel_coordgap_fit.py` is Model
+  B over the chart: a conditional log-linear model normalised over the
+  chart's own analyses (inside and outside passes, exact expectations)
+  and fitted by conditional maximum likelihood.  `cgel_layering.py` is
+  the CGELBank layering policy as a function, reproducing the gold
+  projection chain for 96.8% of heads; `docs/cgel-correction-plan.md`
+  records the corrections and what remains.
 * **CYK parser** — `docs/cgel-headcyk.md` and `cgel_headcyk.py`: a
   head-driven (Eisner/Collins-style) parser that builds each constituent
   outward from its head using the split-head generative tables.  More than

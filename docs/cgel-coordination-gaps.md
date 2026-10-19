@@ -269,84 +269,61 @@ not a term to tune.
 
 ## 8. Implementation and results (`cgel_coordgap.py`)
 
-*The table below is from the chart before the corrections recorded in
-`cgel-correction-plan.md` (finiteness classes, the once-only, finite-subject
-and complement-licensing rules, CGEL's coordination condition); it is kept
-until the re-evaluation on the corrected chart replaces it.*
-
-Besides the three devices, three choices keep the output comparable to the
-treebank: function labels are kept in the emission tables (so binders are
-identifiable and every dependent in the output carries its function);
-unary head chains are folded at extraction (`Clause -> VP -> V` is one
-constituent headed by `V` with all the chain's dependents) and re-expanded
-on output with per-function attachment levels learnt from the corpus; and a
-`Flat` name is headed by its first piece.  The headline measure is labelled
-attachment (LAS: head token and function label right, gaps included), the
-natural measure for headed constituents with function labels; UAS drops
-the label; collapsed-bracket F1 counts each span once, so that the unary
-projection levels, which the parser reconstructs by table lookup (design
-document §3.1a), are not scored; "gaps filled" counts gold gaps into which
-the parser copied exactly the gold material.  No per-level bracket score
-is reported, and no comparison with the earlier parser, which has no
-function labels.
+Numbers below are on the corrected chart (`cgel-correction-plan.md`:
+finiteness classes, the once-only, finite-subject and complement-licensing
+rules, CGEL's coordination condition), five-fold cross-validation, on the
+218 sentences of at most 32 tokens; the two longer ones are excluded by the
+author's decision and reported as such (design document §5.5).
 
 ```
-                                  parsed   LAS    UAS   collapsed  coord.    gaps filled
-                                                        bracket F1 brackets  w/ gold material
-cgel_coordgap, self-fit           218/220  0.517  0.585   0.596     49/129    22/119
-cgel_coordgap, 5-fold CV          218/220  0.505  0.568   0.587     48/129    15/119
-  COORD off                       118/220  0.453  0.519   0.569      0/6      12/73
-  SLASH off (gaps plain tokens)   218/220  0.501  0.557   0.596     48/129     0/119
-  maxgap = 1                      218/220  0.506  0.570   0.585     48/129    17/119
-  markers = feature               214/220  0.506  0.575   0.584     47/126    18/111
-  markers = dependent             218/220  0.493  0.560   0.576     30/129    21/119
-fitted, Model B over the chart   218/220  0.523  0.592   0.593     52/129    19/119
-  (its own run of the folds,
-   unfitted on the same folds)   218/220  0.506  0.572   0.587     47/129    14/119
+                                        parsed   LAS    UAS   collapsed  coord.    gaps filled
+                                                              bracket F1 brackets  w/ gold material
+self-fit, relative-frequency weights    217/218  0.556  0.632   0.592     32/127    35/117
+5-fold CV, relative-frequency weights   216/218  0.534  0.612   0.579     28/126    29/117
+  COORD off                             118/218  0.510  0.587   0.579      0/6      22/73
+  SLASH off (gaps plain tokens)         216/218  0.527  0.601   0.579     28/126     0/117
+  ONCE off                              216/218  0.519  0.580   0.580     33/126    21/117
+  FINITE off                            216/218  0.513  0.589   0.568     28/126    25/117
+  LICENSE off                           216/218  0.526  0.606   0.574     30/126    31/117
+  maxgap = 1                            216/218  0.536  0.614   0.579     28/126    30/117
+  markers = feature                     212/218  0.546  0.620   0.582     28/123    32/109
+  markers = dependent                   216/218  0.533  0.611   0.559     27/126    32/117
+5-fold CV, fitted (Model B)             216/218  0.577  0.628   0.591     32/126    40/117
 
-5-fold CV LAS by sentence type:  coordination only 0.61 · coordination+Sdr 0.59 ·
-  Sdr only 0.49 · plain 0.48 · gap+Sdr 0.44 · coordination+gap+Sdr 0.46 ·
-  gap only 0.39 · coordination+gap 0.39
+before the corrections (same folds):    218/220  0.505  0.568   0.587     48/129    15/119
+  fitted                                218/220  0.523  0.592   0.593     52/129    19/119
+
+5-fold CV LAS by sentence type (unfitted): coordination+Sdr 0.59 · coordination 0.58 ·
+  plain 0.52 · gap+Sdr 0.52 · Sdr 0.51 · coordination+gap+Sdr 0.50 · gap 0.48 ·
+  coordination+gap 0.48
 ```
 
-(`python3 cgel_coordgap.py --eval --ablate`, about 7 minutes; the fitted
-rows from `python3 cgel_coordgap_fit.py --fit`, §7.)
+(`python3 cgel_coordgap.py --eval --ablate`, about 40 minutes;
+`python3 cgel_coordgap_fit.py --fit`, about 19 minutes.)
 
-How to read this honestly:
+How to read this:
 
-* **Coverage** is the clear result: 218 of 220.  The two failures are
-  *and why* (unlike-category coordination) and *etc.* (`Marker-Head`), both
-  on the exception list.
-* **Half the tokens get the right head and function.**  LAS 0.51 means one
-  token in two is attached to the wrong head or with the wrong function;
-  UAS 0.57 says most of that is the head, not the label.  Sentences with
-  gaps are the worst (0.39–0.46), plain sentences are not the best (0.48):
-  the attachment problem is general, and the side tables, which let a verb
-  take several subjects or objects and decide prepositional and clausal
-  attachment by frequency alone, are where it comes from.
-* **COORD** is worth 0.05 LAS on the sentences it reaches and all of the
-  coverage of the 100 coordinator sentences.  It builds a third of the gold
-  coordination brackets; the misses are mostly the 29
-  `Coordination`-as-head cases and *and X* taken as a conjunct of the
-  nearest NP rather than the right one.
-* **Gap filling is where the work is.**  The mechanism delivers a binder
-  of the right category for every gap in every parse (a test checks this),
-  but the parser copies the *gold* material into only 15 of 119 gaps under
-  cross-validation; without the discipline it copies none, and LAS hardly
-  moves (0.501 against 0.505).  On the 17 short gap sentences the misses
-  were classified one by one: every one is the parser choosing the wrong
-  category for what the gap stands for, most often taking an in-situ
-  auxiliary as fronted (`V_aux` for `NP`) or the reverse.  Nothing in the
-  tables prefers the right pairing when two binders and two gaps are in
-  play.  Valency and a preference for the nearest binder of the right
-  category are the next things to add, and they are additions to the
-  scoring, which §7 says needs rebuilding anyway.
-* **maxgap** 2 against 1 makes no difference; 2 is kept for the 19
-  double-gap nodes.
-* **Markers**: see §4.  The three settings are within 0.013 LAS of each
-  other; they differ on coordination brackets (`dependent` 30, the others
-  47–48) and slightly on gap filling.  Nothing here settles what a marker
-  should tell the rest of the tree.
+* **The symbolic corrections are worth three points of LAS and double the
+  gaps filled** at relative-frequency weights (0.505 → 0.534; 15 → 29 of
+  117), and each rule earns its place in the ablation: the finite-subject
+  rule alone is worth two points, the once-only rule one and a half, the
+  licensing rule under one, the gap discipline under one on LAS but all of
+  the gap filling.
+* **Coordination brackets fell** from 48 to 28 of 129: CGEL's condition
+  admits more coordinations and the unfitted weights rank them badly; the
+  fit recovers some (32) and the rest is the next thing to look at.
+* **The fit now does what Model B is for**: on the corrected chart it adds
+  four points of LAS held out (0.534 → 0.577) and eleven gaps (29 → 40),
+  twice what it added on the uncorrected chart, because the constraints it
+  is normalised over are now the right ones.  Support: 8–13 training
+  sentences per fold fall out at extraction (a coordination heading a
+  phrase), at most one more by the gold-above-Z test.
+* **Gap sentences remain the hardest** (0.48 by type).  The 34- and
+  36-token sentences are excluded, not failed; the chart's gap–binder
+  state product is the reason, and the active-chart rebuild is the
+  remedy.
+* **Markers**: the three settings are within 0.013 LAS; `feature` is
+  slightly best and loses four sentences of coverage.  Still open.
 
 Tests: `python3 tests/cgel_coordgap.test.py` (12 tests, about 15 s:
 per-table normalisation, markers never heads or dependents in `schema`
