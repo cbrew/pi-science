@@ -110,6 +110,7 @@ the level chart of the earlier draft.
 | 6 | coordination by CGEL's condition (alike in function; category difference tolerated) | the unlike-category cases (done: support 168 → 175 of 220; 5 of the 6 short unlike cases in the chart) |
 | 7 | full evaluation and Model B fit on the corrected chart, sentences ≤ 32 tokens (two excluded, stated) | held-out LAS and gap filling, with the support test (done: LAS 0.534 unfitted, 0.577 fitted; gaps filled 29 → 40 of 117) |
 | 8 | the active chart (design document §5, §9a) | identity with step 7: Viterbi score and log Z equal on every sentence ≤ 20 tokens except ten with nested coordination (done; the deviations and the numbers are in the design document §9a and the note §8) |
+| 9 | chains built right side first, so a left binder never waits (design document §5.3, invariant 7) | every sentence parses; log Z against step 8 differs only by the two stated support changes (done; the comparison also found and fixed an inside-pass over-count of gap-headed items) |
 
 Steps 1–4 touch no parsing rule; step 4 is done and is what makes step 5
 well defined.

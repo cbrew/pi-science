@@ -135,11 +135,12 @@ ROOT_CATS = frozenset({"Clause", "Coordination", "NP", "VP", "Nom", "AdjP"})
 # (Clause 167, Coordination 34, NP 16, VP, Nom, AdjP once each)
 MAXGAP = 2
 # evaluation length bound: sentences longer than this are not parsed and are
-# reported as excluded.  The chart's gap-binder state product makes the two
-# longest sentences (34 and 36 tokens) infeasible; the author chose to keep
-# two open gaps (the wh-question-plus-inversion construction) and exclude
-# those two sentences until the chart is rebuilt (design document §9).
-MAXTOK = 32
+# reported as excluded.  With the chains built right side first (design
+# document §5.3) every sentence in the corpus parses (the longest, 38
+# tokens, in under a minute), so the bound is above the corpus; it stays
+# as a switch for the record (it was 32 while the two longest sentences
+# were infeasible, October 2026).
+MAXTOK = 40
 NOGAPS: Tuple[str, ...] = ()
 # functions a head takes at most once.  The treebank never repeats Subj,
 # Det, Obj, Obj_ind, Obj_dir, PredComp, DisplacedSubj, ExtraposedSubj,
@@ -638,15 +639,19 @@ def cat(base: str, form: str = "", gap: str = "", marker: str = "") -> Cat:
 COORDINATION = cat("Coordination")
 
 
+NONE = cat("")
+
+
 class Label(NamedTuple):
     """What an edge is.  A field earns its place by a rule that reads it."""
     cat: Cat
     gaps: Tuple[str, ...] = ()              # categories still missing below
-    binders: Tuple[str, ...] = ()           # binders waiting for a gap on the
-                                            #   other side of the head (chains)
-    used: FrozenSet[str] = frozenset()      # once-only functions attached (chains)
+    binders: Tuple[str, ...] = ()           # chains: binders attached on the
+                                            #   right whose gap is further left
+    used: FrozenSet[str] = frozenset()      # chains: once-only functions attached
     members: FrozenSet[Cat] = frozenset()   # a coordination: its conjuncts'
                                             #   categories, nested ones flattened
+    head: Cat = NONE                        # chains: the head's token class
 
     @property
     def dkey(self) -> str:
@@ -661,12 +666,12 @@ class Label(NamedTuple):
 
 # what an edge still needs
 LEFT, RIGHT, COMPLETE, CONJ, TAIL = "L", "R", "complete", "conj", "tail"
-# agenda order within a span size, from the same-span derivations: a right
-# chain before the constituent the head's empty left base completes with it,
-# a constituent before the left chain the empty left base starts from it, a
-# constituent before the conjunct it becomes, a conjunct before the tail it
-# ends.  Every other derivation has strictly smaller tails.
-RANK = {RIGHT: 0, COMPLETE: 1, LEFT: 2, CONJ: 3, TAIL: 4}
+CHAIN = "chain"      # index key shared by L and R chains, for a left dependent
+# agenda order within a span size, from the same-span derivations: a chain
+# before the constituent it completes (R and L alike), a constituent before
+# the conjunct it becomes, a conjunct before the tail it ends.  Every other
+# derivation has strictly smaller tails.
+RANK = {RIGHT: 0, LEFT: 1, COMPLETE: 2, CONJ: 3, TAIL: 4}
 TIE = 1e-9          # two scores this close are a tie (see Chart.prefer)
 
 
@@ -763,7 +768,7 @@ class Chart:
         stands."""
         if new[0] == "attach" and old[0] == "attach":
             edges = self.edges
-            dn, do = edges[new[3]], edges[old[3]]
+            dn, do = edges[new[4]], edges[old[4]]
             return dn.end - dn.start > do.end - do.start
         return False
 
@@ -807,6 +812,7 @@ class Chart:
                 heads = [cat(GAP, gap=X) for X in g.gapcats]
             else:
                 heads = [Cat.parse(tok)]
+            head = Cat.parse(tok)
             for L in heads:
                 if L.base in MARKERS:
                     continue                          # markers are never heads
@@ -816,10 +822,9 @@ class Chart:
                     if ("stop", C, "L") not in W or ("stop", C, "R") not in W:
                         continue
                     g0 = (L.gap,) if (L.gap and slash) else NOGAPS
-                    self.add(Label(cat(C), g0), h, h, LEFT, (),
-                             (("proj", L.key, C), ("stop", C, "L")), ("base", L))
-                    self.add(Label(cat(C)), h, h + 1, RIGHT, (),
-                             (("stop", C, "R"),), ("base", None))
+                    self.add(Label(cat(C), g0, head=head), h, h + 1, RIGHT, (),
+                             (("proj", L.key, C), ("stop", C, "L"), ("stop", C, "R")),
+                             ("base", L, h))
             # a bare leaf: a gap standing for X, or a name piece
             if tok == GAP:
                 for X in g.gapcats:
@@ -837,9 +842,11 @@ class Chart:
             self.at_start[start][(COMPLETE, lab.dkey)].add(e.id)
             self.at_end[end][(COMPLETE, lab.dkey)].add(e.id)
             self.at_end[end][("conjunct", lab.gaps)].add(e.id)
-        elif e.needed == RIGHT or e.needed == LEFT:
-            self.at_start[start][(e.needed, lab.cat.key)].add(e.id)
-            self.at_end[end][(e.needed, lab.cat.key)].add(e.id)
+        elif e.needed == RIGHT:
+            self.at_end[end][(RIGHT, lab.cat.key)].add(e.id)    # takes right dependents
+            self.at_start[start][(CHAIN, lab.cat.key)].add(e.id)  # or turns left
+        elif e.needed == LEFT:
+            self.at_start[start][(CHAIN, lab.cat.key)].add(e.id)
         elif e.needed == CONJ:
             self.at_end[end][(CONJ, lab.gaps)].add(e.id)
         else:
@@ -854,8 +861,8 @@ class Chart:
                 for rid in self.at_end[i].get((RIGHT, C), ()):
                     self.attach("R", edges[rid], e)
             for C in g.takers.get(("L", D), ()):
-                for lid in self.at_start[k].get((LEFT, C), ()):
-                    self.attach("L", edges[lid], e)
+                for cid in self.at_start[k].get((CHAIN, C), ()):
+                    self.attach("L", edges[cid], e)
             if i >= 1 and ts[i - 1] == "Sdr" and g.markers != "dependent":
                 self.mark(e)
             if g.markers == "dependent":              # marker already inside
@@ -871,20 +878,16 @@ class Chart:
                 for tid in self.at_start[k].get((TAIL, lab.gaps), ()):
                     self.coordinate(e, edges[tid])      # the first conjunct
                     self.more(e, edges[tid])            # a bare middle one
-        elif e.needed == RIGHT:
+        elif e.needed == RIGHT or e.needed == LEFT:
             C = lab.cat.key
-            for D in g.emit.get((C, "R"), ()):
-                for did in self.at_start[k].get((COMPLETE, D), ()):
-                    self.attach("R", e, edges[did])
-            for lid in self.at_end[i].get((LEFT, C), ()):
-                self.join(edges[lid], e)
-        elif e.needed == LEFT:
-            C = lab.cat.key
+            if e.needed == RIGHT:
+                for D in g.emit.get((C, "R"), ()):
+                    for did in self.at_start[k].get((COMPLETE, D), ()):
+                        self.attach("R", e, edges[did])
             for D in g.emit.get((C, "L"), ()):
                 for did in self.at_end[i].get((COMPLETE, D), ()):
                     self.attach("L", e, edges[did])
-            for rid in self.at_start[k].get((RIGHT, C), ()):
-                self.join(e, edges[rid])
+            self.complete(e)
         elif e.needed == CONJ:
             if not self.coord:                        # COORD off: a conjunct
                 return                                #   can still be a root
@@ -901,15 +904,16 @@ class Chart:
 
     # -- the rules ---------------------------------------------------------
     def attach(self, side: str, chain: Edge, dep: Edge) -> None:
-        """Extend a chain by one complete dependent of its head."""
+        """Extend a chain by one complete dependent of its head: on the
+        right while the chain still grows right, on the left afterwards
+        (a right chain turns left with its first left dependent)."""
         g = self.g
         C, D = chain.label, dep.label
-        h = chain.end if side == "L" else chain.start
         Ckey, Dkey = C.cat.key, D.dkey
         fs = g.emit.get((Ckey, side), {}).get(Dkey)
         if not fs:
             return
-        head_class = self.ts[h]
+        head_class = C.head.key
         if D.members:                                 # CGEL: alike in function
             licensed = g.dep.get((Ckey, side), {})
             fs = [(f, p) for f, p in fs
@@ -921,8 +925,9 @@ class Chart:
         used0, g0, b0 = C.used, C.gaps, C.binders
         gd = D.gaps
         nominal = C.cat.base in NOMINAL and D.cat.base in CLAUSAL and "Nom" in gd
-        start, end = (dep.start, h) if side == "L" else (h, dep.end)
-        tails, needed, ids = (chain.id, dep.id), chain.needed, (chain.id, dep.id)
+        start, end, needed = ((chain.start, dep.end, RIGHT) if side == "R"
+                              else (dep.start, chain.end, LEFT))
+        tails = (chain.id, dep.id)
         for f, _p in fs:
             if once and f in ONCE and f in used0:
                 continue                              # at most once per head
@@ -937,33 +942,32 @@ class Chart:
                 X = D.cat.base
                 if X in gaps:
                     gaps = _remove(gaps, X)           # fills a gap below
-                elif X in gapset:
-                    binders = _add(binders, X)        # gap on the other side
+                elif side == "R" and X in gapset:
+                    binders = _add(binders, X)        # its gap is further left
                 else:
-                    continue                          # no gap can be an X
+                    continue                          # nothing for it to bind
             elif nominal:
                 gaps = _remove(gaps, "Nom")           # the head noun is the material
-            if gd:
+            if binders and gd:
+                gaps, binders = _cancel(gaps, binders)  # a pending binder's gap
+            elif gd:
                 gaps = tuple(sorted(gaps))
             if not slash:
                 gaps, binders = NOGAPS, NOGAPS
             if len(gaps) > maxgap or len(binders) > maxgap:
                 continue
             used = used0 | {f} if (once and f in ONCE) else used0
-            self.add(Label(C.cat, gaps, binders, used), start, end, needed,
-                     tails, (("dep", Ckey, side, f, Dkey),), ("attach", f) + ids)
+            self.add(Label(C.cat, gaps, binders, used, head=C.head), start, end,
+                     needed, tails, (("dep", Ckey, side, f, Dkey),),
+                     ("attach", f, side, chain.id, dep.id))
 
-    def join(self, left: Edge, right: Edge) -> None:
-        """A left chain meets the right chain of the same head: a constituent.
-        Pending binders cancel against open gaps across the head."""
-        L, R = left.label, right.label
-        gaps, binders = _cancel(L.gaps + R.gaps, L.binders + R.binders)
-        if binders or len(gaps) > self.maxgap:
+    def complete(self, chain: Edge) -> None:
+        """A chain with no binder still waiting is a constituent."""
+        L = chain.label
+        if L.binders:
             return
-        if L.used & R.used:
-            return                                    # once-only on both sides
-        self.add(Label(L.cat, gaps), left.start, right.end, COMPLETE,
-                 (left.id, right.id), (), ("join", left.id, right.id))
+        self.add(Label(L.cat, L.gaps), chain.start, chain.end, COMPLETE,
+                 (chain.id,), (), ("done", chain.id))
 
     def mark(self, body: Edge) -> None:
         """A subordinator marks the constituent to its right."""
@@ -1079,11 +1083,9 @@ class _Rebuilder:
             marker.edge = "Marker"
             body.edge = "Head"
             return Node(cat=e.label.cat.key, children=[marker, body])
-        assert rule == "join", how
-        deps_l, L = self.chain("L", how[1])
-        deps_r, _ = self.chain("R", how[2])
-        return self.expand(e.label.cat.key, self.ch.edges[how[1]].end, L,
-                           deps_l, deps_r)
+        assert rule == "done", how
+        deps_l, deps_r, L, h = self.chain(how[1])
+        return self.expand(e.label.cat.key, h, L, deps_l, deps_r)
 
     def build_tail(self, eid: int) -> List[Node]:
         how = self.ch.back[eid]
@@ -1095,19 +1097,19 @@ class _Rebuilder:
         c.edge = "Coordinate"
         return [c] + self.build_tail(how[2])
 
-    def chain(self, side: str, eid: int):
-        """The dependents (function, node) of one side in surface order, and
-        the head's base label."""
-        out = []
+    def chain(self, eid: int):
+        """The dependents (function, node) of each side in surface order,
+        the head's base label and its position."""
+        left, right = [], []
         how = self.ch.back[eid]
         while how[0] == "attach":
-            _, f, inner, dep = how
+            _, f, side, inner, dep = how
             node = self.build(dep)
             node.edge = f
-            out.append((f, node))
+            (left if side == "L" else right).append((f, node))
             how = self.ch.back[inner]
         assert how[0] == "base", how
-        return (out if side == "L" else list(reversed(out))), how[1]
+        return left, list(reversed(right)), how[1], how[2]
 
     # -- unary re-expansion ---------------------------------------------------
     def expand(self, C: str, h: int, L: Cat, deps_l, deps_r) -> Node:

@@ -47,6 +47,21 @@ class TestInsideOutside(unittest.TestCase):
                       and ("stop", C, "L") in g.w and C in P.ROOT_CATS)
         self.assertAlmostEqual(ch.log_inside(), math.log(by_hand), places=9)
 
+    def test_each_head_base_is_derived_once(self):
+        # a gap token has one base per (gap category, projection); each is
+        # one derivation, so the inside mass of the base is its own weight
+        # (the first chart entered the right base once per gap category,
+        # over-counting gap-headed analyses in the inside pass)
+        ch = P.Chart(self.g, ["GAP"], mode="sum", record=True).run()
+        bases = [e for e in ch.edges if ch.back[e.id][0] == "base"]
+        self.assertTrue(bases)
+        from collections import Counter
+        n = Counter(eid for eid, _tails, _feats in ch.derivs)
+        for e in bases:
+            self.assertEqual(n[e.id], 1, e)
+            feats = ch.derivs[[i for i, (eid, _, _) in enumerate(ch.derivs) if eid == e.id][0]][2]
+            self.assertAlmostEqual(ch.score[e.id], sum(self.g.w[f] for f in feats), places=12)
+
     def test_expectations_match_finite_differences(self):
         for sub in ("help me prepare lunch", "would this -- be fine"):
             for f, e, fd in gradient_check(self.g, find(sub), nfeat=6):

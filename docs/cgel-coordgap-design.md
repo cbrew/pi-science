@@ -230,8 +230,8 @@ kept in creation order (`Chart.derivs`) for the outside pass.
 
 | `needed` | span | content |
 |---|---|---|
-| `L` | `[start, end)`, head at `end`, excluded | a chain of left dependents of that head |
-| `R` | `[start, end)`, head at `start`, included | a chain of right dependents of that head |
+| `R` | `[start, end)`, head at `start` | the head with its right dependents so far; may take more |
+| `L` | `[start, end)`, head inside | the head with all its right dependents and its left dependents so far; takes left dependents only |
 | `complete` | `[start, end)` | a complete constituent |
 | `conj` | `[start, end)` | a `Coordinator`-marked conjunct, waiting for its tail |
 | `tail` | `[start, end)` | one or more conjuncts, the last one marked, waiting for a first conjunct on its left |
@@ -242,11 +242,13 @@ where a field earns its place by a rule that reads it:
 * `cat` is the chart category (§2.2);
 * `gaps` is the sorted tuple of categories `X` still missing below the
   edge: material that a binder of category `X` has yet to supply;
-* `binders` (chains only) is the sorted tuple of binder categories
-  attached on this side whose gap lies on the *other* side of the head or
-  in the head slot; it is always empty on a complete constituent;
-* `used` (chains only) is the set of once-only functions attached on
-  this side;
+* `binders` (chains only) is the sorted tuple of categories of binders
+  attached on the right whose gap lies further left, not yet attached
+  (a `Postnucleus` before its gap); it is always empty on a complete
+  constituent;
+* `used` (chains only) is the set of once-only functions attached;
+* `head` (chains only) is the head's token class, which the finiteness
+  and licensing rules read;
 * `members` (coordinations only) is the set of the conjuncts' categories,
   a nested coordination's members flattened in: this is what the CGEL
   condition checks when the coordination fills a slot.
@@ -262,7 +264,8 @@ lookup followed by a scan of the real candidates:
 | edge | indexed under |
 |---|---|
 | `complete` | `(complete, D)` at both ends, `D` its table key as a dependent (`Coordination` for a coordination); and `(conjunct, gaps)` at its end, as a first or bare conjunct |
-| `L`, `R` | `(L|R, C)` at both ends |
+| `R` | `(R, C)` at its end, for a right dependent; `(chain, C)` at its start, for a left one |
+| `L` | `(chain, C)` at its start |
 | `conj` | `(conj, gaps)` at its end |
 | `tail` | `(tail, gaps)` at its start |
 
@@ -284,6 +287,12 @@ lookup followed by a scan of the real candidates:
 6. Every derivation's tails precede its head edge in agenda order
    (§5.4), so creation order is topological and an edge is popped only
    after every derivation of it exists.  (Checked by the tests.)
+7. A head's right dependents are all attached before any left one: a
+   chain is `R` until its first left dependent and `L` after.  So when a
+   left binder (`Prenucleus`, `Head-Prenucleus`) is attached, every gap
+   it could bind (in the head slot, on the right, or in an inner left
+   dependent) is already in `gaps`, and it never waits; only a right
+   binder whose gap is to its left (`Postnucleus`) can wait, in `binders`.
 
 ### 5.3 Rules
 
@@ -293,36 +302,42 @@ indexed at the position it grows at; so every pair is examined once, when
 the later of the two is popped.
 
 **Base.**  For each token `h`, every projected `C ≠ <leaf>` of its class
-`L`: an `L` edge over `[h, h)` with `log P(C | L) + log stop_L(C)` and an
-`R` edge over `[h, h+1)` with `log stop_R(C)`.  For a gap token there is
-one base per `X ∈ gapcats` with `L = GAP/X` and `gaps = (X,)` on the left
-edge: the gap is the head slot (an inverted auxiliary) and the item is
-missing an `X`.  Marker tokens get no base: they are never heads.
+`L`: an `R` edge over `[h, h+1)` with `log P(C | L) + log stop_L(C) + log
+stop_R(C)` and `head = L`.  For a gap token there is one base per `X ∈
+gapcats` with `L = GAP/X` and `gaps = (X,)`: the gap is the head slot (an
+inverted auxiliary) and the item is missing an `X`.  Marker tokens get no
+base: they are never heads.
 
 **Leaf.**  A gap token gives a `complete` edge over `[i, i+1)` with
 category `GAP/X` and `gaps = (X,)` for every `X` with a leaf outcome; a
 lexical token gives one with its own category when it has a `<leaf>`
 outcome (name pieces).
 
-**Attach (`attach`).**  An `L` or `R` chain with label `(C, g0, b0,
-used)` and a `complete` dependent `(D, gd)` at the position it grows at,
-with function `f` and emission `P(f, D | C, side)`, subject to four
-structural rules, each a switch for ablation: `once` (a head takes `Subj`,
-`Det`, `Obj`, `PredComp`, `Postnucleus`, `Head-Prenucleus` at most once),
-`finite` (a `Subj` only on a finite head: `V:fin`, `V_aux:fin`,
-`V_aux:mod`, or the inverted-auxiliary slot), `license` (a complement
-function only on a head class the treebank shows taking it), and, for a
-coordination dependent, every member category licensed for `f`.  Then:
+**Attach (`attach`).**  An `R` chain and a `complete` dependent `(D,
+gd)` starting at its end (a right dependent), or an `R` or `L` chain and
+a `complete` dependent ending at its start (a left dependent; the result
+is an `L` chain), with function `f` and emission `P(f, D | C, side)`,
+subject to four structural rules, each a switch for ablation: `once` (a
+head takes `Subj`, `Det`, `Obj`, `PredComp`, `Postnucleus`,
+`Head-Prenucleus` at most once), `finite` (a `Subj` only on a finite
+head: `V:fin`, `V_aux:fin`, `V_aux:mod`, or the inverted-auxiliary
+slot), `license` (a complement function only on a head class the
+treebank shows taking it), and, for a coordination dependent, every
+member category licensed for `f`.  Then:
 
 ```
 gaps, binders = g0 + gd, b0
 if f is a binder function:
     require gd == ()                      # a binder is gap-free
     X = D.base
-    if X in gaps: remove one X from gaps  # fills a gap already below
-    else:         add X to binders        # its gap is on the other side
+    if X in gaps:        remove one X from gaps   # binds a gap already present
+    elif side == R and X in gapcats:
+                         add X to binders         # a Postnucleus: its gap is further left
+    else:                reject                   # nothing for it to bind
 elif C in {NP, Nom} and D is clausal and "Nom" in gd:
     remove one "Nom" from gaps            # the head noun is the material
+if binders and gd:
+    cancel each pending binder against a gap of its category
 require len(gaps) <= maxgap and len(binders) <= maxgap
 ```
 
@@ -330,14 +345,13 @@ The nominal rule is what binds a relative clause: the clausal dependent
 is missing a nominal, and the head noun of the phrase it attaches to
 supplies it.  The chain grows by the dependent's span on its side.
 
-**Join (`join`).**  An `L` chain ending at `h` and an `R` chain starting
-at `h` with the same `C`: a `complete` edge over their union with `gaps,
-binders = cancel(gl + gr, bl + br)`, where `cancel` removes each pending
-binder together with an open gap of the same category; require `binders
-== ()` (no binder without a gap), `len(gaps) ≤ maxgap`, and disjoint
-`used`.  This is where a `Prenucleus` on the left meets a gap on the
-right or in the head slot, and a `Postnucleus` on the right meets a gap
-on the left.
+**Completion (`complete`).**  A chain with `binders == ()` is a
+`complete` constituent over the same span, with `gaps` kept and `used`
+and `head` dropped.  (The first draft built the two sides separately and
+joined them at the head, cancelling pending binders of both sides there;
+that let a left binder wait for a gap on its own side further out, which
+the treebank never has, and it multiplied the chain states by the
+pending binders of both sides.)
 
 **MARK (`mark`).**  A `complete` edge starting at `i ≥ 1` with `ts[i-1]
 == Sdr`: a `complete` edge over `[i-1, end)` with `score + log P(X |
@@ -380,17 +394,15 @@ base category in `ROOT_CATS`; or, outside `dependent` mode, the best such
 ### 5.4 The agenda
 
 The agenda is a heap keyed by span size and then by `RANK`: `R` chains
-before `complete` edges before `L` chains before `conj` before `tail`.
-Every derivation has tails of strictly smaller span except four: the
-constituent made by joining a head's empty left base with its right
-chain (same span as the chain: `R < complete`); the left chain made by
-attaching a dependent to the empty left base (same span as the
-dependent: `complete < L`); a constituent becoming a conjunct in
-`dependent` mode (`complete < conj`); a conjunct becoming a one-conjunct
-tail (`conj < tail`).  So every derivation of an edge exists before the
-edge is popped, the score of a tail is final when a derivation is
-scored, and Viterbi (`max`), inside (`sum`) and outside (the reverse of
-`derivs`) are three folds over the same derivation table.
+before `L` chains before `complete` edges before `conj` before `tail`.
+Every derivation has tails of strictly smaller span except three, all
+unary: a chain completing (`R`, `L` < `complete`); a constituent becoming
+a conjunct in `dependent` mode (`complete < conj`); a conjunct becoming a
+one-conjunct tail (`conj < tail`).  So every derivation of an edge
+exists before the edge is popped, the score of a tail is final when a
+derivation is scored, and Viterbi (`max`), inside (`sum`) and outside
+(the reverse of `derivs`) are three folds over the same derivation
+table.
 
 ### 5.5 Ties
 
@@ -414,26 +426,23 @@ that sees the head's class (lexicalised valency), which is step 9.
 
 The work is cubic in `n` times the number of edge pairs examined per
 position, and the labels are a product: category × open gaps (up to two,
-from eight categories: 45 tuples) × pending binders (28 tuples) ×
-once-only state × coordination member sets.  On the 32-token
-right-node-raising sentence the chart holds 293,000 edges (the first
-chart's grids held 344,000 keys; the difference is the pending binders no
-gap can match, now pruned) in 106 s and 230 MB, against 57 s for the
-first chart: the record-valued labels and the agenda cost about 1.9× on
-the longest sentences; the 34- and 36-token sentences do not finish.  Two structural rules keep it there
-rather than worse: CGEL's coordination condition is applied when a
-coordination is formed, not only when it is attached, and the
-never-repeated binder functions `Postnucleus` and `Head-Prenucleus` are
-once-only.
+from eight categories) × a pending `Postnucleus` × once-only state ×
+coordination member sets.  Building the right side first removed the
+pending binders of the left side from that product (they had multiplied
+the chain states by up to 28 tuples): every sentence in the corpus now
+parses, the 38-token one in 50 s and 160 MB, the 33-token one in 17 s,
+the 32-token right-node-raising one in about two minutes and 440 MB.
+Two structural rules keep it there rather than worse: CGEL's
+coordination condition is applied when a coordination is formed, not
+only when it is attached, and the never-repeated binder functions
+`Postnucleus` and `Head-Prenucleus` are once-only.
 
-The author's decision (October 2026): keep two open gaps, because the 19
-heads that need them are a real construction (wh-question with
-subject–auxiliary inversion), and **exclude sentences over 32 tokens
-from evaluation** (two of 220, reported as excluded in every summary)
-until the gap state is made cleverer in the label (binding each open gap
-to its candidate binder when the binder is attached, so that the gap and
-binder tuples stop multiplying), which the active chart now makes a
-change to `Label` and `attach` alone.  The tests restrict corpus-wide
+The length bound `MAXTOK` is now above the corpus and stays as a switch
+for the record: while the two longest sentences were infeasible (October
+2026) the author chose to keep two open gaps, because the 19 heads that
+need them are a real construction (wh-question with subject–auxiliary
+inversion), and to exclude sentences over 32 tokens from evaluation,
+reported as excluded in every summary.  The tests restrict corpus-wide
 checks to sentences of at most 12 tokens.
 
 ## 6. Reconstruction (`_Rebuilder`)
@@ -445,18 +454,18 @@ rule and the tail ids:
 
 | rule | derivation |
 |---|---|
-| base | `("base", L)` (`L` a `Cat`, `GAP/X` for a gap head) on the left edge |
+| base | `("base", L, h)` (`L` a `Cat`, `GAP/X` for a gap head; `h` the head's position) |
 | leaf | `("leaf", X or None)` |
-| attach | `("attach", f, chain id, dependent id)` |
-| join | `("join", left id, right id)` |
+| attach | `("attach", f, side, chain id, dependent id)` |
+| completion | `("done", chain id)` |
 | MARK | `("mark", body id, X)` |
 | COORD | `("coord", first conjunct id, tail id)` |
 | conj | `("conj", body id)` or `("conj-arg", body id)` |
 | tail | `("last", conjunct id)` or `("more", conjunct id, tail id)` |
 
-`_Rebuilder.chain` walks a side chain back to its base, collecting `(f,
-node)` in surface order, and returns the base's `L` (needed to pick the
-chain for expansion).
+`_Rebuilder.chain` walks a chain back to its base, collecting `(f, node)`
+per side in surface order, and returns the base's `L` and position
+(needed to pick the chain for expansion).
 
 ### 6.2 Unary re-expansion (`expand`)
 
@@ -624,6 +633,19 @@ itself be a coordination (two in the treebank; impossible before), and a
 nested first conjunct's members are all checked against a common slot
 (before, they were skipped).  Trees differ only where two derivations
 tie exactly (§5.5).  The held-out numbers are in the note, §8.
+
+The second change (the same month) built each head's right side before
+its left (§5.3, invariant 7), on the author's instruction to support the
+binder change whatever the cost in time.  Its comparison with the
+two-sided chart exposed a fault in both earlier charts' inside pass: the
+right base of a gap-headed item was entered once per gap category, so
+gap-headed analyses were over-counted in `log Z` (never in Viterbi).
+With that corrected in the comparison copy, the two charts agree on
+`log Z` to 1e-9 on 143 of the 165 sentences of at most 20 tokens; the
+rest differ by two intended changes of support: a left binder can no
+longer wait for a gap on its own side further out (unattested), and the
+bound of two is on the open gaps as the chain grows rather than on each
+side separately.  Every sentence in the corpus now parses (§5.6).
 
 ## 10. Switches
 
