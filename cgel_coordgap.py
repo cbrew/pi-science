@@ -109,6 +109,7 @@ Run:    python3 cgel_coordgap.py --eval        (self-fit + 5-fold CV; the
 """
 from __future__ import annotations
 
+import itertools
 import math
 import random
 import statistics
@@ -396,14 +397,21 @@ class Grammar:
         self.coord_cat = _smooth(coord_cat, alpha)
         self.p_more = (conj_total - ncoord + alpha) / (conj_total + 2 * alpha)
         self.p_bare = (conj_bare + alpha) / (conj_total + 2 * alpha)
-        # valency: P(frame | C) over the observed frames of C, with one
-        # reserved "unseen" outcome sharing the smoothing mass
-        self.frame: Dict[str, Dict[Tuple[str, ...], float]] = {}
-        self.frame_unseen: Dict[str, float] = {}
-        for C, c in frames.items():
-            tot = sum(c.values()) + alpha * (len(c) + 1)
-            self.frame[C] = {fr: (v + alpha) / tot for fr, v in c.items()}
-            self.frame_unseen[C] = alpha / tot
+        # valency: P(frame | C) over the attested frames of C.  A head may
+        # take only an attested frame, so a partial frame on a side chain
+        # must be a sub-multiset of one; that bounds the chart (sub-frames
+        # of the attested frames, 83 for Clause) and makes an unattested
+        # frame off-support.
+        self.frame: Dict[str, Dict[Tuple[str, ...], float]] = {
+            C: _smooth(c, alpha) for C, c in frames.items()}
+        self.subframes: Dict[str, set] = {}
+        for C, d in self.frame.items():
+            subs = set()
+            for fr in d:
+                for k in range(len(fr) + 1):
+                    for comb in itertools.combinations(fr, k):
+                        subs.add(tuple(sorted(comb)))
+            self.subframes[C] = subs
         self.chain = {k: c.most_common(1)[0][0] for k, c in chains.items()}
         self.level = {k: c.most_common(1)[0][0] for k, c in levels.items()}
         self.cats = sorted({C for d in self.proj.values() for C in d
@@ -464,8 +472,9 @@ def feature_weights(g: "Grammar") -> Dict[tuple, float]:
       ("stop", C, side)         end of a dependent sequence
       ("dep", C, side, f, D)    dependent (f, D) of a C head on that side
       ("frame", C, frame)       the head of a C took exactly this multiset of
-                                argument functions (valency); unseen frames
-                                share ("frame-unseen", C)
+                                argument functions (valency); only attested
+                                frames exist, and a chain may only build
+                                towards one
       ("mark", kind, word, X)   marker word marks X   (word-specific)
       ("markk", kind, X)        marker class marks X  (back-off)
       ("conj", "marked"|"bare") a non-initial conjunct with/without marker
@@ -490,7 +499,6 @@ def feature_weights(g: "Grammar") -> Dict[tuple, float]:
     for C, d in g.frame.items():
         for fr, p in d.items():
             w[("frame", C, fr)] = lg(p)
-        w[("frame-unseen", C)] = lg(g.frame_unseen[C])
     w[("conj", "marked")] = lg(1 - g.p_bare)
     w[("conj", "bare")] = lg(g.p_bare)
     w[("coord", "more")] = lg(g.p_more)
@@ -592,8 +600,12 @@ class Chart:
                             gaps, binders = NOGAPS, NOGAPS
                         if len(gaps) > maxgap or len(binders) > maxgap:
                             continue
-                        fr = fr0 if (f in NONARG or not self.frame) \
-                            else tuple(sorted(fr0 + (f,)))
+                        if f in NONARG or not self.frame:
+                            fr = fr0
+                        else:
+                            fr = tuple(sorted(fr0 + (f,)))
+                            if fr not in g.subframes.get(C, ()):
+                                continue      # not building towards an attested frame
                         edge(cell, (C, gaps, binders, fr),
                              [(inner, ikey), (D_cell, dkey)],
                              [("dep", C, side, f, D)], (m, dkey, f, ikey))
@@ -640,9 +652,10 @@ class Chart:
                                 continue
                             feats = []
                             if self.frame:
-                                fr = tuple(sorted(frl + rkey[3]))
-                                ff = ("frame", C, fr)
-                                feats = [ff if ff in W else ("frame-unseen", C)]
+                                ff = ("frame", C, tuple(sorted(frl + rkey[3])))
+                                if ff not in W:
+                                    continue          # an unattested frame
+                                feats = [ff]
                             edge(cell, (C, gaps, NOGAPS),
                                  [(left[i][h], lkey), (right[h][k], rkey)], feats,
                                  ("head", h, lkey, rkey))
