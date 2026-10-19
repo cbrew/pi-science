@@ -166,6 +166,41 @@ def binder_category(b: Node) -> str:
 # extraction: folded head chains, MARK events, COORD events
 # ---------------------------------------------------------------------------
 
+COMPLEMENT_TAKERS = {"N": "N_c", "Adj": "Adj_c"}
+
+
+def relabel_complement_takers(root: Node) -> int:
+    """Data intervention: a noun or adjective that takes a complement
+    (``Comp``/``Comp_ind`` anywhere on its projection chain) gets the
+    category ``N_c`` / ``Adj_c``, the way the treebank already separates
+    ``V_aux`` from ``V``.  Valency then applies to those tokens and not to
+    the ordinary majority (60 of 906 nouns, 14 of 221 adjectives).
+    Returns the number of tokens relabelled."""
+    parent = {c: n for n in root.iter_nodes() for c in n.children}
+    done = 0
+    for n in list(root.iter_nodes()):
+        if n.cat not in COMPLEMENT_TAKERS or not n.is_lexical:
+            continue
+        top = _chain_top(n, parent)
+        chain = head_chain(top)
+        if not chain or chain[-1] is not n:
+            continue
+        if any(c.edge in ("Comp", "Comp_ind") for node in chain
+               for c in node.children if c not in chain):
+            n.cat = COMPLEMENT_TAKERS[n.cat]
+            done += 1
+    return done
+
+
+def load_corpus(paths=None) -> List[Sentence]:
+    """The treebank with the complement-taker relabelling applied."""
+    paths = paths or sorted(CGEL.glob("*.cgel"))
+    sents = [s for f in paths for s in parse_cgel_file(str(f))]
+    for s in sents:
+        relabel_complement_takers(s.root)
+    return sents
+
+
 def leaf_positions(root: Node) -> Dict[Node, int]:
     """Surface position of every token, gaps included (matches ``# sent``)."""
     pos, i = {}, 0
@@ -1160,8 +1195,7 @@ def main() -> None:
     ap.add_argument("--ablate", action="store_true",
                     help="CV with COORD off / SLASH off / maxgap=1 / marker modes")
     args = ap.parse_args()
-    sentences = [s for f in sorted(CGEL.glob("*.cgel"))
-                 for s in parse_cgel_file(str(f))]
+    sentences = load_corpus()
     if args.eval:
         g = build_grammar(sentences, args.alpha, args.markers)
         bad = [(C, sd, t) for C, sd, t in g.check_normalization() if abs(t - 1) > 1e-9]
