@@ -136,11 +136,13 @@ NOGAPS: Tuple[str, ...] = ()
 # functions a head takes at most once.  The treebank never repeats Subj,
 # Det, Obj, Obj_ind, Obj_dir, PredComp, DisplacedSubj, ExtraposedSubj,
 # Particle, Comp_ind, Postnucleus or Head-Prenucleus on a head (Comp and
-# Prenucleus do repeat).  The chart tracks only the four that the parser
-# ever repeated in practice: tracking all twelve multiplies the side keys
-# (six times the run time on short sentences) and removes no further
-# repeat.
-ONCE = frozenset({"Subj", "Det", "Obj", "PredComp"})
+# Prenucleus do repeat).  The chart tracks the four the parser repeated in
+# practice, plus the two binder functions: a second Postnucleus or
+# Head-Prenucleus never occurs, and excluding it bounds the pending
+# binders a right chain can carry (344,000 keys instead of 456,000 on the
+# 32-token right-node-raising sentence).  Tracking all twelve multiplied
+# the keys for no further effect.
+ONCE = frozenset({"Subj", "Det", "Obj", "PredComp", "Postnucleus", "Head-Prenucleus"})
 # head classes that license a subject: finite verbs and auxiliaries, modals,
 # and the inverted auxiliary's slot
 FINITE = frozenset({"V:fin", "V_aux:fin", "V_aux:mod", GAP})
@@ -441,6 +443,7 @@ class Grammar:
         levels = defaultdict(Counter)      # (C, f, word|None) -> level cat
         self.skipped = Counter()
         self.licensed: set = set()          # (head class, complement function)
+        self.slots: Dict[tuple, set] = {}   # (C, side, f) -> categories licensed there
         for s in sentences:
             for ev in iter_events(s, markers):
                 if ev[0] == "proj":
@@ -481,6 +484,8 @@ class Grammar:
             p = _smooth(c, alpha)
             self.stop[key] = p.pop("")
             self.dep[key] = p
+            for (f, D) in p:
+                self.slots.setdefault(key + (f,), set()).add(D)
             byD = defaultdict(list)
             for (f, D), v in p.items():
                 byD[D].append((f, v))
@@ -499,6 +504,22 @@ class Grammar:
                                if is_gap_label(L)})
         self.markable = {kind: set(d) for kind, d in self.mark_kind.items()}
         self.w = feature_weights(self)     # log-linear weights (§ Chart)
+
+    def coordinable(self, cats) -> bool:
+        """CGEL's condition applied when a coordination is formed: its
+        members must all be able to fill one and the same function slot
+        (a nested coordination counts as fillable wherever a coordination
+        is).  Checked here as well as at attachment so that coordinations
+        no slot could take are never built."""
+        need = {X for X in cats if not X.startswith("Coordination")}
+        if len(need) <= 1:
+            return True
+        key = frozenset(need)
+        cache = self.__dict__.setdefault("_coordinable", {})
+        if key not in cache:
+            cache[key] = any(need <= lic for lic in self.slots.values()) or \
+                need <= ROOT_CATS
+        return cache[key]
 
     def p_mark(self, kind: str, word: Optional[str], X: str) -> Optional[float]:
         d = self.mark.get((kind, word)) if word else None
@@ -755,6 +776,8 @@ class Chart:
                             if tkey[1] != gx:
                                 continue                  # across the board
                             cats = set(coord_members(tkey[0])) | {X}
+                            if not g.coordinable(cats):
+                                continue                  # no slot takes them all
                             edge(cell, (coord_label(cats), gx, NOGAPS),
                                  [(arg[i][m], key), (tail[m][k], tkey)], [],
                                  ("coord", m, key, tkey))
@@ -781,13 +804,14 @@ class Chart:
                     for tkey in tail[m][k]:
                         tcats, gx = set(coord_members(tkey[0])), tkey[1]
                         for ckey in conj[i][m]:
-                            if ckey[1] != gx:
+                            if ckey[1] != gx or not g.coordinable(tcats | {ckey[0]}):
                                 continue
                             edge(tcell, (coord_label(tcats | {ckey[0]}), gx, NOGAPS),
                                  [(conj[i][m], ckey), (tail[m][k], tkey)],
                                  [("coord", "more")], ("more", m, "conj", ckey, tkey))
                         for akey in arg[i][m]:
-                            if akey[1] != gx or akey[0].startswith("Coordination"):
+                            if akey[1] != gx or akey[0].startswith("Coordination") \
+                                    or not g.coordinable(tcats | {akey[0]}):
                                 continue
                             edge(tcell, (coord_label(tcats | {akey[0]}), gx, NOGAPS),
                                  [(arg[i][m], akey), (tail[m][k], tkey)],
