@@ -252,7 +252,7 @@ def main() -> None:
     ap.add_argument("--l2", type=float, default=0.1)
     ap.add_argument("--folds", type=int, default=5)
     args = ap.parse_args()
-    sentences = [s for f in sorted(CGEL.glob("*.cgel")) for s in parse_cgel_file(str(f))]
+    sentences = P.load_corpus()          # with the data interventions applied
     if args.check:
         g = build_grammar(sentences)
         for sub in ("help me prepare lunch", "would this -- be fine",
