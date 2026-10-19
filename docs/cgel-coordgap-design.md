@@ -416,10 +416,11 @@ The work is cubic in `n` times the number of edge pairs examined per
 position, and the labels are a product: category × open gaps (up to two,
 from eight categories: 45 tuples) × pending binders (28 tuples) ×
 once-only state × coordination member sets.  On the 32-token
-right-node-raising sentence the chart holds 307,000 edges (the first
+right-node-raising sentence the chart holds 293,000 edges (the first
 chart's grids held 344,000 keys; the difference is the pending binders no
-gap can match, now pruned) in about two minutes and 240 MB; the 34- and
-36-token sentences do not finish.  Two structural rules keep it there
+gap can match, now pruned) in 106 s and 230 MB, against 57 s for the
+first chart: the record-valued labels and the agenda cost about 1.9× on
+the longest sentences; the 34- and 36-token sentences do not finish.  Two structural rules keep it there
 rather than worse: CGEL's coordination condition is applied when a
 coordination is formed, not only when it is attached, and the
 never-repeated binder functions `Postnucleus` and `Head-Prenucleus` are

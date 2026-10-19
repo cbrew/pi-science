@@ -284,19 +284,19 @@ the record.
 active chart, ties by late closure (design document §5.5):
 self-fit, relative-frequency weights    217/218  0.560  0.639   0.594     32/127    36/117
 5-fold CV, relative-frequency weights   216/218  0.543  0.622   0.578     29/126    32/117
+  COORD off                             118/218  0.516  0.595   0.575      0/6      24/73
+  SLASH off (gaps plain tokens)         216/218  0.537  0.615   0.583     29/126     0/117
+  ONCE off                              216/218  0.530  0.594   0.589     33/126    20/117
+  FINITE off                            216/218  0.519  0.596   0.568     28/126    27/117
+  LICENSE off                           216/218  0.521  0.600   0.569     30/126    32/117
+  maxgap = 1                            216/218  0.546  0.624   0.579     29/126    34/117
+  markers = feature                     212/218  0.550  0.627   0.583     28/123    33/109
+  markers = dependent                   216/218  0.540  0.619   0.563     27/126    33/117
 5-fold CV, fitted (Model B)             216/218  0.588  0.641   0.595     33/126    41/117
 
 first chart (ties by loop order; nested coordination inconsistent):
 self-fit, relative-frequency weights    217/218  0.556  0.632   0.592     32/127    35/117
 5-fold CV, relative-frequency weights   216/218  0.534  0.612   0.579     28/126    29/117
-  COORD off                             118/218  0.510  0.587   0.579      0/6      22/73
-  SLASH off (gaps plain tokens)         216/218  0.527  0.601   0.579     28/126     0/117
-  ONCE off                              216/218  0.519  0.580   0.580     33/126    21/117
-  FINITE off                            216/218  0.513  0.589   0.568     28/126    25/117
-  LICENSE off                           216/218  0.526  0.606   0.574     30/126    31/117
-  maxgap = 1                            216/218  0.536  0.614   0.579     28/126    30/117
-  markers = feature                     212/218  0.546  0.620   0.582     28/123    32/109
-  markers = dependent                   216/218  0.533  0.611   0.559     27/126    32/117
 5-fold CV, fitted (Model B)             216/218  0.577  0.628   0.591     32/126    40/117
 
 before the corrections (same folds):    218/220  0.505  0.568   0.587     48/129    15/119
@@ -307,8 +307,11 @@ before the corrections (same folds):    218/220  0.505  0.568   0.587     48/129
   coordination+gap 0.48
 ```
 
-(`python3 cgel_coordgap.py --eval --ablate`, about 40 minutes;
-`python3 cgel_coordgap_fit.py --fit`, about 19 minutes.)
+(`python3 cgel_coordgap.py --eval --ablate`, about 50 minutes;
+`python3 cgel_coordgap_fit.py --fit`, about 20 minutes.  The active chart
+is slower than the first by about 1.9× on the longest sentences: 106 s
+against 57 s on the 32-token one, for the record-valued labels and the
+agenda; the state-space reduction of the next step is where the time is.)
 
 How to read this:
 
@@ -331,12 +334,15 @@ How to read this:
   117), with the same support loss as before (8–13 training sentences
   per fold at extraction, at most one by the gold-above-Z test).
 
-* **The symbolic corrections are worth three points of LAS and double the
-  gaps filled** at relative-frequency weights (0.505 → 0.534; 15 → 29 of
-  117), and each rule earns its place in the ablation: the finite-subject
-  rule alone is worth two points, the once-only rule one and a half, the
-  licensing rule under one, the gap discipline under one on LAS but all of
-  the gap filling.
+* **The symbolic corrections are worth three to four points of LAS and
+  double the gaps filled** at relative-frequency weights (0.505 → 0.534
+  on the first chart, 0.543 on the active one; 15 → 29, 32 of 117), and
+  each rule earns its place in the ablation: the finite-subject rule
+  alone is worth two and a half points, the licensing rule two, the
+  once-only rule one and a half, the gap discipline half a point on LAS
+  but all of the gap filling.  One open gap instead of two costs nothing
+  on this corpus (0.546 against 0.543, within the noise), which bears on
+  the state-space step.
 * **Coordination brackets fell** from 48 to 28 of 129: CGEL's condition
   admits more coordinations and the unfitted weights rank them badly; the
   fit recovers some (32) and the rest is the next thing to look at.
