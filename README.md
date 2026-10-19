@@ -96,8 +96,9 @@ analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
   implementation), `cgel_coordgap_survey.py` and `cgel_coordgap.py`: a corpus survey of
   coordination shapes and gap/binder configurations, and a parser that adds
   to the head-driven core a coordination schema, a switchable treatment of
-  marker tokens, and a gap count (slash) with across-the-board passing
-  through coordination, so that each gap is co-indexed with the material
+  marker tokens, and a gap feature carrying the category of the missing
+  material (slash), passed across the board through coordination, so that
+  each gap is co-indexed with the material
   that fills it (`fill_gaps`).  Gap positions are taken from the input.
   Evaluated by labelled attachment (LAS), collapsed brackets and gap
   filling: coverage 218/220, LAS 0.51, UAS 0.57, collapsed-bracket F1
