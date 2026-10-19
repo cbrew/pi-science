@@ -65,31 +65,29 @@ def outside(chart: Chart) -> Tuple[float, Dict[tuple, float]]:
     """Expected feature counts under the model, from a recorded sum-mode
     chart.  Returns ``(log Z, {feature: E[count]})``.
 
-    Outside masses are propagated over the recorded edges in reverse
-    creation order, which is reverse topological order: every edge was
-    recorded after all the edges that build its tails."""
+    Outside masses are propagated over the recorded derivations in reverse
+    creation order, which is reverse topological order: every derivation
+    was recorded after all the derivations of its tails (the agenda pops an
+    edge only after every derivation of it is in place)."""
     logZ = chart.log_inside()
     if logZ == LOG0:
         return logZ, {}
-    out: Dict[Tuple[int, tuple], float] = {}
-    for cell, key, _ in chart.roots:
-        out[(id(cell), key)] = 0.0
+    out: Dict[int, float] = {r: 0.0 for r in chart.roots}
     expect: Dict[tuple, float] = defaultdict(float)
-    w = chart.w
-    for cell, key, tails, feats in reversed(chart.edges):
-        o = out.get((id(cell), key))
+    w, score = chart.w, chart.score
+    for eid, tails, feats in reversed(chart.derivs):
+        o = out.get(eid)
         if o is None:
             continue
         ew = sum(w[f] for f in feats)
-        ins = [tcell[tkey][0] for tcell, tkey in tails]
-        total = o + ew + sum(ins)                 # mass through this edge
+        ins = [score[t] for t in tails]
+        total = o + ew + sum(ins)                 # mass through this derivation
         m = math.exp(total - logZ)
         for f in feats:
             expect[f] += m
-        for j, (tcell, tkey) in enumerate(tails):
+        for j, t in enumerate(tails):
             contrib = total - ins[j]
-            k = (id(tcell), tkey)
-            out[k] = contrib if k not in out else _logaddexp(out[k], contrib)
+            out[t] = contrib if t not in out else _logaddexp(out[t], contrib)
     return logZ, dict(expect)
 
 

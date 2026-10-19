@@ -109,13 +109,15 @@ Run:    python3 cgel_coordgap.py --eval        (self-fit + 5-fold CV; the
 """
 from __future__ import annotations
 
+import heapq
 import itertools
 import math
 import random
 import statistics
 from collections import Counter, defaultdict
+from functools import lru_cache
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, FrozenSet, List, NamedTuple, Optional, Sequence, Tuple
 
 from cgel_headcyk import _brackets
 from cgel_reader import Node, Sentence, _deepcopy, parse_cgel_file
@@ -166,20 +168,6 @@ def gap_label(X: str) -> str:
 
 def is_gap_label(D: str) -> bool:
     return D.startswith(GAP + "/")
-
-
-def coord_label(cats) -> str:
-    """Chart category of a coordination whose conjuncts have these
-    categories: ``Coordination/NP+PP``.  The tree node is plain
-    ``Coordination``; the set is carried so that, when the coordination is
-    attached, each conjunct's category can be checked against the function
-    slot it fills (CGEL: coordinates must be alike in function; a
-    difference of category is tolerated)."""
-    return "Coordination/" + "+".join(sorted(cats))
-
-
-def coord_members(D: str):
-    return D.split("/", 1)[1].split("+") if D.startswith("Coordination/") else None
 
 
 def binder_label(D: str) -> str:
@@ -508,7 +496,14 @@ class Grammar:
         # the categories a gap may stand for (from the binders in the data)
         self.gapcats = sorted({L.split("/", 1)[1] for L in self.proj
                                if is_gap_label(L)})
+        self.gapset = frozenset(self.gapcats)
         self.markable = {kind: set(d) for kind, d in self.mark_kind.items()}
+        # which categories take D on a side: the chart's lookup for a
+        # complete constituent looking for a chain to join
+        self.takers: Dict[Tuple[str, str], List[str]] = defaultdict(list)
+        for (C, side), byD in self.emit.items():
+            for D in byD:
+                self.takers[(side, D)].append(C)
         self.w = feature_weights(self)     # log-linear weights (§ Chart)
 
     def coordinable(self, cats) -> bool:
@@ -543,7 +538,7 @@ def build_grammar(sentences, alpha: float = 1.0, markers: str = "schema") -> Gra
 
 
 # ---------------------------------------------------------------------------
-# the chart
+# the chart: an active chart over structured labels
 # ---------------------------------------------------------------------------
 
 class Parse:
@@ -604,15 +599,106 @@ def feature_weights(g: "Grammar") -> Dict[tuple, float]:
     return w
 
 
-class Chart:
-    """The chart, driven by one of two semirings over the same rule loops.
+class Cat(NamedTuple):
+    """A category as a record.  The tables (built by the extractor from the
+    treebank's strings) are keyed by ``key``, stored once at construction;
+    the chart itself never parses a string, it compares fields.  Build one
+    with ``cat(...)`` or ``Cat.parse(...)``."""
+    key: str             # the table key: NP, V_aux:fin, GAP/NP, Clause[that]
+    base: str            # NP, Clause, V_aux, GAP, NP+PP (a fused category), ...
+    form: str = ""       # finiteness class of a verb or auxiliary: fin, nonfin, mod
+    gap: str = ""        # base == GAP: the category the gap stands for
+    marker: str = ""     # markers=feature: the word of the marker carried
 
-    ``mode="max"`` is Viterbi: each cell key holds ``(score, backpointer)``.
-    ``mode="sum"`` is the inside pass: each key holds ``(log inside mass,
-    None)`` and, with ``record=True``, every edge is kept as ``(head cell,
-    head key, [(tail cell, tail key), ...], features)`` in creation order
-    for the outside pass.  The support (which keys exist) is the same in
-    both modes; the weight of an edge is the sum of its features' weights.
+    @classmethod
+    @lru_cache(maxsize=None)
+    def parse(cls, s: str) -> "Cat":
+        marker = ""
+        if s.endswith("]"):
+            s, marker = s[:-1].split("[", 1)
+        gap = ""
+        if s.startswith(GAP + "/"):
+            s, gap = GAP, s[len(GAP) + 1:]
+        base, form = (s.split(":", 1) + [""])[:2]
+        return cat(base, form, gap, marker)
+
+
+@lru_cache(maxsize=None)
+def cat(base: str, form: str = "", gap: str = "", marker: str = "") -> Cat:
+    s = base
+    if form:
+        s += ":" + form
+    if gap:
+        s += "/" + gap
+    if marker:
+        s += "[" + marker + "]"
+    return Cat(s, base, form, gap, marker)
+
+
+COORDINATION = cat("Coordination")
+
+
+class Label(NamedTuple):
+    """What an edge is.  A field earns its place by a rule that reads it."""
+    cat: Cat
+    gaps: Tuple[str, ...] = ()              # categories still missing below
+    binders: Tuple[str, ...] = ()           # binders waiting for a gap on the
+                                            #   other side of the head (chains)
+    used: FrozenSet[str] = frozenset()      # once-only functions attached (chains)
+    members: FrozenSet[Cat] = frozenset()   # a coordination: its conjuncts'
+                                            #   categories, nested ones flattened
+
+    @property
+    def dkey(self) -> str:
+        """The table key of this constituent as a dependent."""
+        return "Coordination" if self.members else self.cat.key
+
+    @property
+    def conjuncts(self) -> FrozenSet[Cat]:
+        """What this constituent contributes to a coordination's members."""
+        return self.members or frozenset({self.cat})
+
+
+# what an edge still needs
+LEFT, RIGHT, COMPLETE, CONJ, TAIL = "L", "R", "complete", "conj", "tail"
+# agenda order within a span size, from the same-span derivations: a right
+# chain before the constituent the head's empty left base completes with it,
+# a constituent before the left chain the empty left base starts from it, a
+# constituent before the conjunct it becomes, a conjunct before the tail it
+# ends.  Every other derivation has strictly smaller tails.
+RANK = {RIGHT: 0, COMPLETE: 1, LEFT: 2, CONJ: 3, TAIL: 4}
+
+
+class Edge(NamedTuple):
+    id: int
+    label: Label
+    start: int
+    end: int
+    needed: str
+
+
+class Chart:
+    """An active chart.  An edge is ``(id, label, start, end, needed)``,
+    one per distinct tuple; its score and its best derivation (``mode="max"``,
+    Viterbi) or its inside mass (``mode="sum"``) are tables keyed by id, and
+    with ``record=True`` every derivation is kept, in creation order, for the
+    outside pass.
+
+    ``needed`` says what the edge still wants: ``L`` a chain of left
+    dependents of a head at ``end`` (span ``[start, end)`` excludes the head),
+    ``R`` a chain of right dependents of a head at ``start`` (the span
+    includes it), ``complete`` nothing, ``conj`` a coordinator-marked conjunct
+    waiting for its tail, ``tail`` one or more conjuncts, the last marked,
+    waiting for a first conjunct on the left.
+
+    Edges are indexed by the position they grow at: ``at_start[j]`` and
+    ``at_end[j]`` map a part of the label that a rule selects on (the
+    category a chain wants, the gap state a coordination must share) to the
+    set of edge ids there, so that each rule is an array lookup followed by
+    a set scan over its real candidates.  The agenda is a heap by span size
+    (then by ``RANK``), so every derivation of an edge is in place before the
+    edge is popped and combined, and creation order is topological.  The
+    support (which edges exist) is the same in both modes.
     """
 
     def __init__(self, g: "Grammar", ts: Sequence[str],
@@ -627,30 +713,42 @@ class Chart:
         self.maxgap, self.coord, self.slash = maxgap, coord, slash
         self.mode, self.record = mode, record
         self.w = g.w
-        N1 = self.n + 1
-        self.left = [[{} for _ in range(N1)] for _ in range(N1)]
-        self.right = [[{} for _ in range(N1)] for _ in range(N1)]
-        self.arg = [[{} for _ in range(N1)] for _ in range(N1)]
-        self.conj = [[{} for _ in range(N1)] for _ in range(N1)]
-        self.tail = [[{} for _ in range(N1)] for _ in range(N1)]
-        self.edges: list = []
-        self.roots: list = []
+        self.edges: List[Edge] = []
+        self.score: List[float] = []
+        self.back: List[tuple] = []                 # best derivation, by id
+        self.derivs: List[Tuple[int, Tuple[int, ...], Tuple[tuple, ...]]] = []
+        self._ids: Dict[tuple, int] = {}
+        self.at_start: List[Dict[tuple, set]] = [defaultdict(set) for _ in range(self.n + 1)]
+        self.at_end: List[Dict[tuple, set]] = [defaultdict(set) for _ in range(self.n + 1)]
+        self.agenda: list = []
+        self.roots: List[int] = []
 
     # -- the semiring ------------------------------------------------------
-    def edge(self, cell: dict, key, tails, feats, bp) -> None:
+    def add(self, label: Label, start: int, end: int, needed: str,
+            tails: Tuple[int, ...], feats: Tuple[tuple, ...], how: tuple) -> None:
+        """One derivation of an edge: its score is the sum of its tails'
+        scores and its features' weights.  New edges join the agenda."""
         val = 0.0
-        for tcell, tkey in tails:
-            val += tcell[tkey][0]
+        for t in tails:
+            val += self.score[t]
         for f in feats:
             val += self.w[f]
-        cur = cell.get(key)
-        if self.mode == "max":
-            if cur is None or val > cur[0]:
-                cell[key] = (val, bp)
+        key = (label, start, end, needed)
+        eid = self._ids.get(key)
+        if eid is None:
+            eid = len(self.edges)
+            self._ids[key] = eid
+            self.edges.append(Edge(eid, label, start, end, needed))
+            self.score.append(val)
+            self.back.append(how)
+            heapq.heappush(self.agenda, (end - start, RANK[needed], eid))
+        elif self.mode == "max":
+            if val > self.score[eid]:
+                self.score[eid], self.back[eid] = val, how
         else:
-            cell[key] = (val if cur is None else _logaddexp(cur[0], val), None)
+            self.score[eid] = _logaddexp(self.score[eid], val)
         if self.record:
-            self.edges.append((cell, key, tails, feats))
+            self.derivs.append((eid, tails, feats))
 
     def mark_feature(self, kind: str, word: Optional[str], X: str):
         f = ("mark", kind, word, X)
@@ -659,203 +757,237 @@ class Chart:
         f = ("markk", kind, X)
         return f if f in self.w else None
 
-    # -- the rules ---------------------------------------------------------
+    # -- the loop ----------------------------------------------------------
     def run(self) -> "Chart":
-        g, ts, words, n = self.g, self.ts, self.words, self.n
-        maxgap, slash = self.maxgap, self.slash
-        left, right, arg, conj, tail = \
-            self.left, self.right, self.arg, self.conj, self.tail
-        edge = self.edge
-        W = self.w
+        self._bases()
+        edges, agenda = self.edges, self.agenda
+        while agenda:
+            _, _, eid = heapq.heappop(agenda)
+            e = edges[eid]
+            self._index(e)
+            self._combine(e)
+        n = self.n
+        for e in edges:
+            if e.start != 0 or e.end != n or e.label.gaps:
+                continue
+            lab = e.label
+            if e.needed == COMPLETE:
+                ok = all(m.base in ROOT_CATS for m in lab.members) if lab.members \
+                    else lab.cat.base in ROOT_CATS
+            elif e.needed == CONJ and self.g.markers != "dependent":
+                ok = lab.cat.base in ROOT_CATS      # clause-initial "and"
+            else:
+                ok = False
+            if ok:
+                self.roots.append(e.id)
+        return self
 
-        def attach(C, side, cell, m, inner, D_cell, h):
-            """Extend a left/right chain by one dependent constituent of the
-            head at token ``h``."""
-            emit = g.emit.get((C, side))
-            if not emit:
-                return
-            head_class = ts[h]
-            licensed = g.dep.get((C, side), {})
-            for dkey, _dv in D_cell.items():
-                D, gd, _bd = dkey
-                members = coord_members(D)
-                fs = emit.get("Coordination" if members else D)
-                if not fs:
-                    continue
-                if members:
-                    fs = [(f, p) for f, p in fs
-                          if all((f, X) in licensed or X.startswith("Coordination")
-                                 for X in members)]
-                    if not fs:
-                        continue
-                for ikey in inner:
-                    C0, g0, b0, used0 = ikey
-                    if C0 != C:
-                        continue
-                    for f, _p in fs:
-                        if self.once and f in ONCE and f in used0:
-                            continue                      # at most once per head
-                        if self.finite and f == "Subj" and head_class not in FINITE:
-                            continue                      # a finite head licenses it
-                        if self.license and f in COMPLEMENT \
-                                and (head_class, f) not in g.licensed:
-                            continue                      # the head class licenses it
-                        gaps, binders = g0 + gd, b0
-                        if f in BINDERS:
-                            if gd:                        # a binder is gap-free
-                                continue
-                            X = binder_label(D)
-                            if X in gaps:
-                                gaps = _remove(gaps, X)   # fills a gap below
-                            else:
-                                binders = _add(binders, X)  # gap on the other side
-                        elif C in NOMINAL and D.split("[")[0] in CLAUSAL and "Nom" in gd:
-                            gaps = _remove(gaps, "Nom")   # the head noun is the material
-                        gaps = tuple(sorted(gaps))
-                        if not slash:
-                            gaps, binders = NOGAPS, NOGAPS
-                        if len(gaps) > maxgap or len(binders) > maxgap:
-                            continue
-                        used = tuple(sorted(used0 + (f,))) \
-                            if (self.once and f in ONCE) else used0
-                        edge(cell, (C, gaps, binders, used),
-                             [(inner, ikey), (D_cell, dkey)],
-                             [("dep", C, side, f, "Coordination" if members else D)],
-                             (m, dkey, f, ikey))
-
-        # heads: base cells (F = 0)
-        for h in range(n):
-            for L in ([gap_label(X) for X in g.gapcats] if ts[h] == GAP else [ts[h]]):
-                if L in MARKERS:
-                    continue
-                for C in g.proj.get(L, {}):
+    def _bases(self) -> None:
+        g, ts, W, slash = self.g, self.ts, self.w, self.slash
+        for h in range(self.n):
+            tok = ts[h]
+            if tok == GAP:
+                heads = [cat(GAP, gap=X) for X in g.gapcats]
+            else:
+                heads = [Cat.parse(tok)]
+            for L in heads:
+                if L.base in MARKERS:
+                    continue                          # markers are never heads
+                for C in g.proj.get(L.key, {}):
                     if C == "<leaf>":
                         continue
                     if ("stop", C, "L") not in W or ("stop", C, "R") not in W:
                         continue
-                    g0 = (L.split("/", 1)[1],) if (ts[h] == GAP and slash) else NOGAPS
-                    edge(left[h][h], (C, g0, NOGAPS, ()), [],
-                         [("proj", L, C), ("stop", C, "L")], ("base", L))
-                    edge(right[h][h + 1], (C, NOGAPS, NOGAPS, ()), [],
-                         [("stop", C, "R")], "stop")
+                    g0 = (L.gap,) if (L.gap and slash) else NOGAPS
+                    self.add(Label(cat(C), g0), h, h, LEFT, (),
+                             (("proj", L.key, C), ("stop", C, "L")), ("base", L))
+                    self.add(Label(cat(C)), h, h + 1, RIGHT, (),
+                             (("stop", C, "R"),), ("base", None))
+            # a bare leaf: a gap standing for X, or a name piece
+            if tok == GAP:
+                for X in g.gapcats:
+                    L = cat(GAP, gap=X)
+                    if ("leaf", L.key) in W:
+                        self.add(Label(L, (X,) if slash else NOGAPS), h, h + 1,
+                                 COMPLETE, (), (("leaf", L.key),), ("leaf", X))
+            elif ("leaf", tok) in W:
+                self.add(Label(Cat.parse(tok)), h, h + 1, COMPLETE, (),
+                         (("leaf", tok),), ("leaf", None))
 
-        for F in range(1, n + 1):
-            # ---- complete constituents over [i, k) --------------------------
-            for i in range(0, n - F + 1):
-                k = i + F
-                cell = arg[i][k]
-                if F == 1:
-                    if ts[i] == GAP:
-                        for X in g.gapcats:
-                            if ("leaf", gap_label(X)) in W:
-                                gx = (X,) if slash else NOGAPS
-                                edge(cell, (gap_label(X), gx, NOGAPS), [],
-                                     [("leaf", gap_label(X))], ("leaf", X))
-                    elif ("leaf", ts[i]) in W:                   # a Flat name piece
-                        edge(cell, (ts[i], NOGAPS, NOGAPS), [],
-                             [("leaf", ts[i])], ("leaf", None))
-                for h in range(i, k):
-                    for lkey in left[i][h]:
-                        C, gl, bl, frl = lkey
-                        for rkey in right[h][k]:
-                            if rkey[0] != C:
-                                continue
-                            gaps, binders = _cancel(gl + rkey[1], bl + rkey[2])
-                            if binders or len(gaps) > maxgap:
-                                continue
-                            if set(frl) & set(rkey[3]):
-                                continue              # once-only on both sides
-                            edge(cell, (C, gaps, NOGAPS),
-                                 [(left[i][h], lkey), (right[h][k], rkey)], [],
-                                 ("head", h, lkey, rkey))
-                if ts[i] == "Sdr" and F >= 2 and g.markers != "dependent":
-                    for (X, gx, _b) in list(arg[i + 1][k]):
-                        mf = self.mark_feature("Sdr", words[i], X)
-                        if mf:
-                            Xm = f"{X}[{words[i]}]" if g.markers == "feature" else X
-                            edge(cell, (Xm, gx, NOGAPS),
-                                 [(arg[i + 1][k], (X, gx, _b))], [mf], ("mark", X, gx))
-                for m in range(i + 1, k) if self.coord else ():
-                    for key in arg[i][m]:
-                        X, gx, _b = key
-                        for tkey in tail[m][k]:
-                            if tkey[1] != gx:
-                                continue                  # across the board
-                            cats = set(coord_members(tkey[0])) | {X}
-                            if not g.coordinable(cats):
-                                continue                  # no slot takes them all
-                            edge(cell, (coord_label(cats), gx, NOGAPS),
-                                 [(arg[i][m], key), (tail[m][k], tkey)], [],
-                                 ("coord", m, key, tkey))
-            # ---- marked conjuncts and conjunct tails ------------------------
-            for i in range(0, n - F + 1):
-                k = i + F
-                if ts[i] == "Coordinator" and F >= 2:
-                    if g.markers == "dependent":      # marker already inside arg
-                        for key in list(arg[i][k]):
-                            edge(conj[i][k], key, [(arg[i][k], key)],
-                                 [("conj", "marked")], ("conj-arg",))
-                    else:
-                        for key in list(arg[i + 1][k]):
-                            mf = self.mark_feature("Coordinator", words[i], key[0])
-                            if mf:
-                                edge(conj[i][k], key, [(arg[i + 1][k], key)],
-                                     [mf, ("conj", "marked")], ("conj", key))
-                tcell = tail[i][k]
-                for key in list(conj[i][k]):
-                    X, gx, _b = key
-                    edge(tcell, (coord_label({X}), gx, NOGAPS), [(conj[i][k], key)],
-                         [("coord", "last")], ("last", key))
-                for m in range(i + 1, k):
-                    for tkey in tail[m][k]:
-                        tcats, gx = set(coord_members(tkey[0])), tkey[1]
-                        for ckey in conj[i][m]:
-                            if ckey[1] != gx or not g.coordinable(tcats | {ckey[0]}):
-                                continue
-                            edge(tcell, (coord_label(tcats | {ckey[0]}), gx, NOGAPS),
-                                 [(conj[i][m], ckey), (tail[m][k], tkey)],
-                                 [("coord", "more")], ("more", m, "conj", ckey, tkey))
-                        for akey in arg[i][m]:
-                            if akey[1] != gx or akey[0].startswith("Coordination") \
-                                    or not g.coordinable(tcats | {akey[0]}):
-                                continue
-                            edge(tcell, (coord_label(tcats | {akey[0]}), gx, NOGAPS),
-                                 [(arg[i][m], akey), (tail[m][k], tkey)],
-                                 [("conj", "bare"), ("coord", "more")],
-                                 ("more", m, "arg", akey, tkey))
-            # ---- left chains: head at h = i + F -----------------------------
-            for i in range(0, n - F):
-                h = i + F
-                for m in range(i + 1, h + 1):
-                    if arg[i][m] and left[m][h]:
-                        for C in {C0 for (C0, _, _, _) in left[m][h]}:
-                            attach(C, "L", left[i][h], m, left[m][h], arg[i][m], h)
-            # ---- right chains: head at h, dependents over (h, h + F] --------
-            for h in range(0, n - F):
-                k = h + F + 1
-                for m in range(h + 1, k):
-                    if arg[m][k] and right[h][m]:
-                        for C in {C0 for (C0, _, _, _) in right[h][m]}:
-                            attach(C, "R", right[h][k], m, right[h][m], arg[m][k], h)
+    def _index(self, e: Edge) -> None:
+        lab, start, end = e.label, e.start, e.end
+        if e.needed == COMPLETE:
+            self.at_start[start][(COMPLETE, lab.dkey)].add(e.id)
+            self.at_end[end][(COMPLETE, lab.dkey)].add(e.id)
+            self.at_end[end][("conjunct", lab.gaps)].add(e.id)
+        elif e.needed == RIGHT or e.needed == LEFT:
+            self.at_start[start][(e.needed, lab.cat.key)].add(e.id)
+            self.at_end[end][(e.needed, lab.cat.key)].add(e.id)
+        elif e.needed == CONJ:
+            self.at_end[end][(CONJ, lab.gaps)].add(e.id)
+        else:
+            self.at_start[start][(TAIL, lab.gaps)].add(e.id)
 
-        for key in arg[0][n]:
-            C, gaps, _b = key
-            members = coord_members(C)
-            ok = (all(X.split("[")[0] in ROOT_CATS or X.startswith("Coordination")
-                      for X in members) if members
-                  else C.split("[")[0] in ROOT_CATS)
-            if not gaps and ok:
-                self.roots.append((arg[0][n], key, "arg"))
-        if g.markers != "dependent":
-            for key in conj[0][n]:                      # clause-initial "and"
-                C, gaps, _b = key
-                if not gaps and C in ROOT_CATS:
-                    self.roots.append((conj[0][n], key, "conj"))
-        return self
+    def _combine(self, e: Edge) -> None:
+        g, ts, edges = self.g, self.ts, self.edges
+        lab, i, k = e.label, e.start, e.end
+        if e.needed == COMPLETE:
+            D = lab.dkey
+            for C in g.takers.get(("R", D), ()):
+                for rid in self.at_end[i].get((RIGHT, C), ()):
+                    self.attach("R", edges[rid], e)
+            for C in g.takers.get(("L", D), ()):
+                for lid in self.at_start[k].get((LEFT, C), ()):
+                    self.attach("L", edges[lid], e)
+            if i >= 1 and ts[i - 1] == "Sdr" and g.markers != "dependent":
+                self.mark(e)
+            if g.markers == "dependent":              # marker already inside
+                if ts[i] == "Coordinator" and k - i >= 2:
+                    self.add(lab, i, k, CONJ, (e.id,), (("conj", "marked"),),
+                             ("conj-arg", e.id))
+            elif i >= 1 and ts[i - 1] == "Coordinator":
+                mf = self.mark_feature("Coordinator", self.words[i - 1], D)
+                if mf:
+                    self.add(lab, i - 1, k, CONJ, (e.id,), (mf, ("conj", "marked")),
+                             ("conj", e.id))
+            if self.coord:
+                for tid in self.at_start[k].get((TAIL, lab.gaps), ()):
+                    self.coordinate(e, edges[tid])      # the first conjunct
+                    self.more(e, edges[tid])            # a bare middle one
+        elif e.needed == RIGHT:
+            C = lab.cat.key
+            for D in g.emit.get((C, "R"), ()):
+                for did in self.at_start[k].get((COMPLETE, D), ()):
+                    self.attach("R", e, edges[did])
+            for lid in self.at_end[i].get((LEFT, C), ()):
+                self.join(edges[lid], e)
+        elif e.needed == LEFT:
+            C = lab.cat.key
+            for D in g.emit.get((C, "L"), ()):
+                for did in self.at_end[i].get((COMPLETE, D), ()):
+                    self.attach("L", e, edges[did])
+            for rid in self.at_start[k].get((RIGHT, C), ()):
+                self.join(e, edges[rid])
+        elif e.needed == CONJ:
+            if not self.coord:                        # COORD off: a conjunct
+                return                                #   can still be a root
+            self.add(Label(COORDINATION, lab.gaps, members=lab.conjuncts), i, k,
+                     TAIL, (e.id,), (("coord", "last"),), ("last", e.id))
+            for tid in self.at_start[k].get((TAIL, lab.gaps), ()):
+                self.more(e, edges[tid])
+        else:                                         # a tail: grows leftward
+            for cid in self.at_end[i].get((CONJ, lab.gaps), ()):
+                self.more(edges[cid], e)
+            for aid in self.at_end[i].get(("conjunct", lab.gaps), ()):
+                self.coordinate(edges[aid], e)
+                self.more(edges[aid], e)
+
+    # -- the rules ---------------------------------------------------------
+    def attach(self, side: str, chain: Edge, dep: Edge) -> None:
+        """Extend a chain by one complete dependent of its head."""
+        g = self.g
+        C, D = chain.label, dep.label
+        h = chain.end if side == "L" else chain.start
+        Ckey, Dkey = C.cat.key, D.dkey
+        fs = g.emit.get((Ckey, side), {}).get(Dkey)
+        if not fs:
+            return
+        head_class = self.ts[h]
+        if D.members:                                 # CGEL: alike in function
+            licensed = g.dep.get((Ckey, side), {})
+            fs = [(f, p) for f, p in fs
+                  if all((f, m.key) in licensed for m in D.members)]
+            if not fs:
+                return
+        once, finite, license, slash = self.once, self.finite, self.license, self.slash
+        maxgap, gapset, lic = self.maxgap, g.gapset, g.licensed
+        used0, g0, b0 = C.used, C.gaps, C.binders
+        gd = D.gaps
+        nominal = C.cat.base in NOMINAL and D.cat.base in CLAUSAL and "Nom" in gd
+        start, end = (dep.start, h) if side == "L" else (h, dep.end)
+        tails, needed, ids = (chain.id, dep.id), chain.needed, (chain.id, dep.id)
+        for f, _p in fs:
+            if once and f in ONCE and f in used0:
+                continue                              # at most once per head
+            if finite and f == "Subj" and head_class not in FINITE:
+                continue                              # a finite head licenses it
+            if license and f in COMPLEMENT and (head_class, f) not in lic:
+                continue                              # the head class licenses it
+            gaps, binders = g0 + gd, b0
+            if f in BINDERS:
+                if gd:                                # a binder is gap-free
+                    continue
+                X = D.cat.base
+                if X in gaps:
+                    gaps = _remove(gaps, X)           # fills a gap below
+                elif X in gapset:
+                    binders = _add(binders, X)        # gap on the other side
+                else:
+                    continue                          # no gap can be an X
+            elif nominal:
+                gaps = _remove(gaps, "Nom")           # the head noun is the material
+            if gd:
+                gaps = tuple(sorted(gaps))
+            if not slash:
+                gaps, binders = NOGAPS, NOGAPS
+            if len(gaps) > maxgap or len(binders) > maxgap:
+                continue
+            used = used0 | {f} if (once and f in ONCE) else used0
+            self.add(Label(C.cat, gaps, binders, used), start, end, needed,
+                     tails, (("dep", Ckey, side, f, Dkey),), ("attach", f) + ids)
+
+    def join(self, left: Edge, right: Edge) -> None:
+        """A left chain meets the right chain of the same head: a constituent.
+        Pending binders cancel against open gaps across the head."""
+        L, R = left.label, right.label
+        gaps, binders = _cancel(L.gaps + R.gaps, L.binders + R.binders)
+        if binders or len(gaps) > self.maxgap:
+            return
+        if L.used & R.used:
+            return                                    # once-only on both sides
+        self.add(Label(L.cat, gaps), left.start, right.end, COMPLETE,
+                 (left.id, right.id), (), ("join", left.id, right.id))
+
+    def mark(self, body: Edge) -> None:
+        """A subordinator marks the constituent to its right."""
+        lab, i = body.label, body.start
+        word = self.words[i - 1]
+        mf = self.mark_feature("Sdr", word, lab.dkey)
+        if not mf:
+            return
+        X = cat(lab.cat.base, lab.cat.form, lab.cat.gap, word) \
+            if self.g.markers == "feature" else lab.cat
+        self.add(Label(X, lab.gaps, members=lab.members), i - 1, body.end, COMPLETE,
+                 (body.id,), (mf,), ("mark", body.id, lab.cat.key))
+
+    def more(self, conj: Edge, tail: Edge) -> None:
+        """A conjunct followed by a tail: a longer tail.  A bare (unmarked)
+        middle conjunct is a complete constituent that is not itself a
+        coordination (which would duplicate the nested analysis)."""
+        if conj.needed == COMPLETE and conj.label.members:
+            return
+        members = conj.label.conjuncts | tail.label.members
+        if not self.g.coordinable({m.key for m in members}):
+            return                                    # no slot takes them all
+        feats = (("coord", "more"),) if conj.needed == CONJ \
+            else (("conj", "bare"), ("coord", "more"))
+        self.add(Label(COORDINATION, tail.label.gaps, members=members),
+                 conj.start, tail.end, TAIL, (conj.id, tail.id), feats,
+                 ("more", conj.id, tail.id))
+
+    def coordinate(self, first: Edge, tail: Edge) -> None:
+        """A first conjunct and a tail with the same gaps (across the board):
+        a coordination, carrying its members' categories."""
+        members = first.label.conjuncts | tail.label.members
+        if not self.g.coordinable({m.key for m in members}):
+            return
+        self.add(Label(COORDINATION, tail.label.gaps, members=members),
+                 first.start, tail.end, COMPLETE, (first.id, tail.id), (),
+                 ("coord", first.id, tail.id))
 
     def log_inside(self) -> float:
         """log Z(string): the total mass of all analyses (mode "sum")."""
-        vals = [cell[key][0] for cell, key, _ in self.roots]
+        vals = [self.score[r] for r in self.roots]
         if not vals:
             return LOG0
         m = max(vals)
@@ -881,111 +1013,88 @@ def parse(g: Grammar, ts: Sequence[str], words: Optional[Sequence[str]] = None,
     feature (gaps are then tokens with no binding discipline), ``once=False``
     the at-most-once rule for the functions the treebank never repeats on a
     head, and ``finite=False`` the licensing of a subject by a finite head;
-    all exist for ablation.  See ``Chart`` for the cells and keys.
+    all exist for ablation.  See ``Chart`` for the edges and labels.
     """
     if len(ts) == 0:
         return None
     ch = Chart(g, ts, words, maxgap, coord, slash, mode="max",
                once=once, finite=finite, license=license).run()
-    best, bkey, bcell, bkind = LOG0, None, None, None
-    for cell, key, kind in ch.roots:
-        if cell[key][0] > best:
-            best, bkey, bcell, bkind = cell[key][0], key, cell, kind
-    if bkey is None:
+    if not ch.roots:
         return None
-    tree = _Rebuilder(g, ch.ts, ch.words, ch.left, ch.right, ch.arg, ch.conj,
-                      ch.tail).build(bkind, 0, ch.n, bkey)
+    best = max(ch.roots, key=lambda r: ch.score[r])
+    tree = _Rebuilder(ch).build(best)
     tree.edge = None
     link_gaps(tree)
-    return Parse(tree, best, tree.cat)
+    return Parse(tree, ch.score[best], tree.cat)
 
 
 class _Rebuilder:
-    def __init__(self, g, ts, words, left, right, arg, conj, tail):
-        self.g, self.ts, self.words = g, ts, words
-        self.left, self.right, self.arg, self.conj, self.tail = \
-            left, right, arg, conj, tail
+    """The tree of an edge from the best derivations (``Chart.back``)."""
+
+    def __init__(self, ch: Chart):
+        self.ch, self.g, self.ts, self.words = ch, ch.g, ch.ts, ch.words
 
     def leaf(self, i: int, X: Optional[str] = None) -> Node:
         if self.ts[i] == GAP:
             return Node(cat=GAP, feats={"for": [X or "?"]})
         return Node(cat=self.ts[i], feats={"t": [self.words[i] or self.ts[i]]})
 
-    def build(self, kind: str, i: int, k: int, key) -> Node:
-        if kind == "conj":
-            _, bp = self.conj[i][k][key]
-            if bp[0] == "conj-arg":
-                return self.build("arg", i, k, key)
-            body = self.build("arg", i + 1, k, bp[1])
-            marker = self.leaf(i)
+    def build(self, eid: int) -> Node:
+        e, how = self.ch.edges[eid], self.ch.back[eid]
+        rule = how[0]
+        if rule == "leaf":
+            return self.leaf(e.start, how[1])
+        if rule == "mark":
+            body = self.build(how[1])
+            marker = self.leaf(e.start)
             marker.edge = "Marker"
-            body.edge = "Head"
-            return Node(cat=key[0], children=[marker, body])
-        _, bp = self.arg[i][k][key]
-        if bp[0] == "leaf":
-            return self.leaf(i, bp[1])
-        if bp[0] == "mark":
-            _, X, gx = bp
-            body = self.build("arg", i + 1, k, (X, gx, NOGAPS))
-            marker = self.leaf(i)
-            marker.edge = "Marker"
-            return self.expand_marked(X, marker, body)
-        if bp[0] == "coord":
-            _, m, ckey, tkey = bp
-            first = self.build("arg", i, m, ckey)
+            return self.expand_marked(how[2], marker, body)
+        if rule == "coord":
+            first = self.build(how[1])
             first.edge = "Coordinate"
             return Node(cat="Coordination",
-                        children=[first] + self.build_tail(m, k, tkey))
-        _, h, lkey, rkey = bp
-        C = key[0]
-        deps_l = self.chain_deps("L", i, h, lkey)
-        deps_r = self.chain_deps("R", h, k, rkey)
-        base = self.left[h][h][self._base_key(i, h, lkey)][1]
-        return self.expand(C, h, base[1], deps_l, deps_r)
+                        children=[first] + self.build_tail(how[2]))
+        if rule == "conj-arg":
+            return self.build(how[1])
+        if rule == "conj":
+            body = self.build(how[1])
+            marker = self.leaf(e.start)
+            marker.edge = "Marker"
+            body.edge = "Head"
+            return Node(cat=e.label.cat.key, children=[marker, body])
+        assert rule == "join", how
+        deps_l, L = self.chain("L", how[1])
+        deps_r, _ = self.chain("R", how[2])
+        return self.expand(e.label.cat.key, self.ch.edges[how[1]].end, L,
+                           deps_l, deps_r)
 
-    def _base_key(self, i, h, key):
-        while i != h:
-            _, bp = self.left[i][h][key]
-            i, key = bp[0], bp[3]
-        return key
-
-    def build_tail(self, m: int, k: int, key) -> List[Node]:
-        _, bp = self.tail[m][k][key]
-        if bp[0] == "last":
-            c = self.build("conj", m, k, bp[1])
+    def build_tail(self, eid: int) -> List[Node]:
+        how = self.ch.back[eid]
+        if how[0] == "last":
+            c = self.build(how[1])
             c.edge = "Coordinate"
             return [c]
-        _, m2, kind, ckey, tkey = bp
-        c = self.build(kind, m, m2, ckey)
+        c = self.build(how[1])
         c.edge = "Coordinate"
-        return [c] + self.build_tail(m2, k, tkey)
+        return [c] + self.build_tail(how[2])
 
-    def chain_deps(self, side: str, a: int, b: int, key) -> List[Tuple[str, Node]]:
-        """Dependents (function, node) of one side in surface order."""
+    def chain(self, side: str, eid: int):
+        """The dependents (function, node) of one side in surface order, and
+        the head's base label."""
         out = []
-        if side == "L":
-            i, h = a, b
-            while i != h:
-                _, bp = self.left[i][h][key]
-                m, dkey, f, ikey = bp
-                node = self.build("arg", i, m, dkey)
-                node.edge = f
-                out.append((f, node))
-                i, key = m, ikey
-            return out
-        h, k = a, b
-        while k != h + 1:
-            _, bp = self.right[h][k][key]
-            m, dkey, f, ikey = bp
-            node = self.build("arg", m, k, dkey)
+        how = self.ch.back[eid]
+        while how[0] == "attach":
+            _, f, inner, dep = how
+            node = self.build(dep)
             node.edge = f
             out.append((f, node))
-            k, key = m, ikey
-        return list(reversed(out))
+            how = self.ch.back[inner]
+        assert how[0] == "base", how
+        return (out if side == "L" else list(reversed(out))), how[1]
 
     # -- unary re-expansion ---------------------------------------------------
-    def expand(self, C: str, h: int, L: str, deps_l, deps_r) -> Node:
-        chain = list(self.g.chain.get((C, L), (C, L)))
+    def expand(self, C: str, h: int, L: Cat, deps_l, deps_r) -> Node:
+        chain = list(self.g.chain.get((C, L.key), (C, L.key)))
         depth = {}                                        # 0 = top
         for d, cat in enumerate(chain):
             depth.setdefault(cat, d)
@@ -1005,7 +1114,7 @@ class _Rebuilder:
             return out
         lv_l = assign(list(reversed(deps_l)))         # nearest the head first
         lv_r = assign(deps_r)
-        head = self.leaf(h, L.split("/", 1)[1] if is_gap_label(L) else None)
+        head = self.leaf(h, L.gap or None)
         head.edge = "Head"
         node = head
         for d in range(bottom, -1, -1):
@@ -1031,6 +1140,7 @@ class _Rebuilder:
             node = body
         node.children.insert(0, marker)
         return body
+
 
 
 # ---------------------------------------------------------------------------

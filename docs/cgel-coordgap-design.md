@@ -46,21 +46,30 @@ are, not what they stand for.
 
 ### 2.2 Chart categories
 
-Chart categories are strings:
+A chart category is a record, `Cat(key, base, form, gap, marker)`, built
+by `cat(...)` or parsed once from a table string by `Cat.parse`:
 
-| form | meaning |
-|---|---|
-| `Clause`, `NP`, `VP`, … | a folded constituent (§3.1) of that treebank category |
-| `N`, `D`, … | a bare lexical token used as a dependent (a `Flat` name piece) |
-| `GAP/X` | a gap token standing for material of category `X` |
-| `Clause[that]`, `VP[to]` | (`markers="feature"` only) a constituent marked by that subordinator |
-| `Coordination` | a coordination of like conjuncts |
+| key (the table string) | record | meaning |
+|---|---|---|
+| `Clause`, `NP`, `VP`, … | `base` | a folded constituent (§3.1) of that treebank category |
+| `N`, `D`, … | `base` | a bare lexical token used as a dependent (a `Flat` name piece) |
+| `V:fin`, `V_aux:mod` | `base`, `form` | a verb or auxiliary with its finiteness class (a data intervention, `load_corpus`) |
+| `GAP/X` | `base = GAP`, `gap = X` | a gap token standing for material of category `X` |
+| `Clause[that]`, `VP[to]` | `base`, `marker` | (`markers="feature"` only) a constituent marked by that subordinator |
+| `NP+PP` | `base` | a fused category of the treebank, atomic here |
+| `Coordination` | `base` | a coordination; its conjuncts' categories live in the edge label (§5.1), not in the category |
+
+The tables (§4) are keyed by the strings the extractor produces; `key`
+is that string, stored once, and is the only place the chart meets it.
+Every rule compares fields: a binder supplies its `base`, a finite head
+is one whose `base`/`form` is in `FINITE`, a root is a `base` in
+`ROOT_CATS`.  Nothing downstream of the extractor parses a string.
 
 `X` in `GAP/X` ranges over the *binder categories* observed in the
 treebank (`Grammar.gapcats`), normalised by `binder_category`: a head-noun
 binder (`N`, `N_pro`, `Nom`) supplies a `Nom`; a `Coordination` binder
 supplies its conjuncts' category; every other binder supplies its own
-category.  On the corpus the set is `AdjP AdvP Clause DP NP Nom PP VP
+category.  On the corpus the set is `AdjP AdvP Clause NP Nom PP VP
 V_aux`.
 
 ### 2.3 Output tree
@@ -209,74 +218,98 @@ verifies nothing else (§9).
 
 ## 5. The chart (`parse`)
 
-### 5.1 Cells and keys
+### 5.1 Edges and labels
 
-Five tables of cells over spans, each a dict from key to
-`(score, backpointer)`, keeping only the best entry per key (Viterbi):
+The chart is an active chart.  An **edge** is `(id, label, start, end,
+needed)`, one per distinct `(label, start, end, needed)`; its score and
+its best derivation (Viterbi) or inside mass are tables keyed by id
+(`Chart.score`, `Chart.back`), and with `record=True` every derivation is
+kept in creation order (`Chart.derivs`) for the outside pass.
 
-| cell | span | content |
+`needed` says what the edge still wants:
+
+| `needed` | span | content |
 |---|---|---|
-| `left[i][h]` | `[i, h)` | head at `h`, left dependents attached outward over `[i, h)` |
-| `right[h][k]` | `(h, k)` | head at `h`, right dependents over `(h, k)` |
-| `arg[i][k]` | `[i, k)` | a complete constituent |
-| `conj[i][k]` | `[i, k)` | a `Coordinator`-marked conjunct |
-| `tail[i][k]` | `[i, k)` | one or more conjuncts, the last one marked |
+| `L` | `[start, end)`, head at `end`, excluded | a chain of left dependents of that head |
+| `R` | `[start, end)`, head at `start`, included | a chain of right dependents of that head |
+| `complete` | `[start, end)` | a complete constituent |
+| `conj` | `[start, end)` | a `Coordinator`-marked conjunct, waiting for its tail |
+| `tail` | `[start, end)` | one or more conjuncts, the last one marked, waiting for a first conjunct on its left |
 
-Keys are `(C, gaps, binders)`:
+The **label** is a record, `Label(cat, gaps, binders, used, members)`,
+where a field earns its place by a rule that reads it:
 
-* `C` is the chart category (§2.2);
+* `cat` is the chart category (§2.2);
 * `gaps` is the sorted tuple of categories `X` still missing below the
-  item: material that a binder of category `X` has yet to supply;
-* `binders` is the sorted tuple of binder categories attached on this
-  side chain whose gap lies on the *other* side of the head (or in the
-  head slot); it is non-empty only in `left`/`right` cells and is always
-  empty on a complete constituent;
-* side keys carry a fourth element, the once-only functions already
-  attached on that side.
+  edge: material that a binder of category `X` has yet to supply;
+* `binders` (chains only) is the sorted tuple of binder categories
+  attached on this side whose gap lies on the *other* side of the head or
+  in the head slot; it is always empty on a complete constituent;
+* `used` (chains only) is the set of once-only functions attached on
+  this side;
+* `members` (coordinations only) is the set of the conjuncts' categories,
+  a nested coordination's members flattened in: this is what the CGEL
+  condition checks when the coordination fills a slot.
 
 Both tuples are bounded by `maxgap` (2 by default).  With
 `slash=False` both are always empty.
 
+Edges are indexed by the positions they grow at, `at_start[j]` and
+`at_end[j]`: each is a map from the part of the label a rule selects on
+to the set of edge ids there, so that the fundamental rule is an array
+lookup followed by a scan of the real candidates:
+
+| edge | indexed under |
+|---|---|
+| `complete` | `(complete, D)` at both ends, `D` its table key as a dependent (`Coordination` for a coordination); and `(conjunct, gaps)` at its end, as a first or bare conjunct |
+| `L`, `R` | `(L|R, C)` at both ends |
+| `conj` | `(conj, gaps)` at its end |
+| `tail` | `(tail, gaps)` at its start |
+
 ### 5.2 Invariants
 
-1. Every `arg`, `conj` and `tail` key has `binders == ()`.
-2. A root is an `arg[0][n]` (or `conj[0][n]`) key with `gaps == ()` and a
-   root-eligible category.
+1. Every `complete`, `conj` and `tail` label has `binders == ()` and
+   `used == {}`.
+2. A root is a `complete` (or, outside `dependent` mode, a `conj`) edge
+   over `[0, n)` with `gaps == ()` and a root-eligible category: a
+   coordination needs every member rootable.
 3. A binder dependent (`Prenucleus`, `Postnucleus`, `Head-Prenucleus`) is
-   itself gap-free (`gd == ()`).
-4. A `Coordination` key's `gaps` equals the `gaps` of each of its
-   conjuncts (across the board); conjuncts share the whole key, so in
+   itself gap-free.
+4. A coordination's `gaps` equals the `gaps` of each of its conjuncts
+   (across the board); conjuncts share the whole gap state, so in
    `feature` mode they also share the marker feature.
 5. Every surface token is used exactly once: as a head, as a bare leaf
    dependent, or as a marker consumed by MARK/conj.  (Checked by the
    tests on output trees.)
-6. Every dependency computed at footprint `F` uses only cells of smaller
-   footprint or cells of footprint `F` computed earlier in the same
-   iteration (§5.4).
+6. Every derivation's tails precede its head edge in agenda order
+   (§5.4), so creation order is topological and an edge is popped only
+   after every derivation of it exists.  (Checked by the tests.)
 
 ### 5.3 Rules
 
-Scores are log-probabilities; `+` below is in log space.
+Scores are log-probabilities; `+` below is in log space.  A rule fires
+when an edge is popped from the agenda, against the edges already
+indexed at the position it grows at; so every pair is examined once, when
+the later of the two is popped.
 
-**Base (F = 0).**  For each token `h`:
-`left[h][h][(C, g0, ())] = log P(C | L) + log stop_L(C)` and
-`right[h][h+1][(C, (), ())] = log stop_R(C)` for every projected `C ≠
-<leaf>`.  For an ordinary token `L = ts[h]`, `g0 = ()`.  For a gap token
-there is one base per `X ∈ gapcats` with `L = GAP/X` and `g0 = (X,)`: the
-gap is the head slot (an inverted auxiliary) and the item is missing an
-`X`.  Marker tokens get no base: they are never heads.
+**Base.**  For each token `h`, every projected `C ≠ <leaf>` of its class
+`L`: an `L` edge over `[h, h)` with `log P(C | L) + log stop_L(C)` and an
+`R` edge over `[h, h+1)` with `log stop_R(C)`.  For a gap token there is
+one base per `X ∈ gapcats` with `L = GAP/X` and `gaps = (X,)` on the left
+edge: the gap is the head slot (an inverted auxiliary) and the item is
+missing an `X`.  Marker tokens get no base: they are never heads.
 
-**Leaf (F = 1).**  A gap token gives `arg[i][i+1][(GAP/X, (X,), ())] =
-log P(<leaf> | GAP/X)` for every `X` with that outcome; a lexical token
-gives `arg[i][i+1][(L, (), ())] = log P(<leaf> | L)` when `L` has a
-`<leaf>` outcome (name pieces).
+**Leaf.**  A gap token gives a `complete` edge over `[i, i+1)` with
+category `GAP/X` and `gaps = (X,)` for every `X` with a leaf outcome; a
+lexical token gives one with its own category when it has a `<leaf>`
+outcome (name pieces).
 
-**Attach (left and right chains).**  `attach(C, side, …)` extends a chain
-item `(C, g0, b0, used)` by one complete dependent `(D, gd, ())` with
-function `f` and emission `P(f, D | C, side)`, subject to four structural
-rules, each a switch for ablation: `once` (a head takes `Subj`, `Det`,
-`Obj`, `PredComp` at most once; `used` on the side key records which it
-has), `finite` (a `Subj` only on a finite head: `V:fin`, `V_aux:fin`,
+**Attach (`attach`).**  An `L` or `R` chain with label `(C, g0, b0,
+used)` and a `complete` dependent `(D, gd)` at the position it grows at,
+with function `f` and emission `P(f, D | C, side)`, subject to four
+structural rules, each a switch for ablation: `once` (a head takes `Subj`,
+`Det`, `Obj`, `PredComp`, `Postnucleus`, `Head-Prenucleus` at most once),
+`finite` (a `Subj` only on a finite head: `V:fin`, `V_aux:fin`,
 `V_aux:mod`, or the inverted-auxiliary slot), `license` (a complement
 function only on a head class the treebank shows taking it), and, for a
 coordination dependent, every member category licensed for `f`.  Then:
@@ -285,7 +318,7 @@ coordination dependent, every member category licensed for `f`.  Then:
 gaps, binders = g0 + gd, b0
 if f is a binder function:
     require gd == ()                      # a binder is gap-free
-    X = D without any [feature]
+    X = D.base
     if X in gaps: remove one X from gaps  # fills a gap already below
     else:         add X to binders        # its gap is on the other side
 elif C in {NP, Nom} and D is clausal and "Nom" in gd:
@@ -295,59 +328,69 @@ require len(gaps) <= maxgap and len(binders) <= maxgap
 
 The nominal rule is what binds a relative clause: the clausal dependent
 is missing a nominal, and the head noun of the phrase it attaches to
-supplies it.
+supplies it.  The chain grows by the dependent's span on its side.
 
-**Head combination.**  `arg[i][k][(C, gaps, ())]` from `left[i][h][(C,
-gl, bl)]` and `right[h][k][(C, gr, br)]`: `gaps, binders = cancel(gl +
-gr, bl + br)` where `cancel` removes each pending binder together with an
-open gap of the same category; require `binders == ()` (no binder without
-a gap) and `len(gaps) ≤ maxgap`.  This is where a `Prenucleus` on the left
-meets a gap on the right or in the head slot, and a `Postnucleus` on the
-right meets a gap on the left.
+**Join (`join`).**  An `L` chain ending at `h` and an `R` chain starting
+at `h` with the same `C`: a `complete` edge over their union with `gaps,
+binders = cancel(gl + gr, bl + br)`, where `cancel` removes each pending
+binder together with an open gap of the same category; require `binders
+== ()` (no binder without a gap), `len(gaps) ≤ maxgap`, and disjoint
+`used`.  This is where a `Prenucleus` on the left meets a gap on the
+right or in the head slot, and a `Postnucleus` on the right meets a gap
+on the left.
 
-**MARK (subordinator).**  If `ts[i] == Sdr` and `F ≥ 2`, for every
-`arg[i+1][k][(X, gx, ())]`: `arg[i][k][(X', gx, ())] = score + log P(X |
-word)`, where `X' = X` (`schema`) or `X[word]` (`feature`).  Not applied
-in `dependent` mode.  Gaps pass through unchanged.
+**MARK (`mark`).**  A `complete` edge starting at `i ≥ 1` with `ts[i-1]
+== Sdr`: a `complete` edge over `[i-1, end)` with `score + log P(X |
+word)`, `X` the edge's table key as a dependent; the category is kept
+(`schema`) or carries the word (`feature`).  Not applied in `dependent`
+mode.  Gaps and members pass through unchanged.
 
-**conj (coordinator-marked conjunct).**  If `ts[i] == Coordinator` and
-`F ≥ 2`: in `schema`/`feature` mode, from every `arg[i+1][k]` key with
-`log P(X | word) + log(1 − p_bare)`; in `dependent` mode the marker is
-already inside `arg[i][k]`, which becomes the conjunct with `log(1 −
-p_bare)`.
+**conj.**  A `complete` edge starting at `i ≥ 1` with `ts[i-1] ==
+Coordinator`: in `schema`/`feature` mode a `conj` edge over `[i-1, end)`
+with `log P(X | word) + log(1 − p_bare)`; in `dependent` mode the marker
+is already inside the constituent, which becomes the conjunct with
+`log(1 − p_bare)` when it starts at a `Coordinator`.  `X` is again the
+table key as a dependent, so a marked conjunct may itself be a
+coordination (*and [a road between Fujairah and Dubai]*): the treebank
+has two, and `Coordination` is in the coordinator's marking table.
 
-**tail.**  `tail[i][k][key]` is either a single final conjunct
-(`conj[i][k][key] + log(1 − p_more)`) or a conjunct followed by a tail
-with the same key: `conj[i][m] + tail[m][k] + log p_more`, or a bare
-non-final conjunct `arg[i][m] + log p_bare + tail[m][k] + log p_more`
-(a `Coordination` may not be a bare middle conjunct, to avoid
-left-recursive duplicates).
+**tail (`more`).**  A `conj` edge is a one-conjunct tail with `log(1 −
+p_more)` and the conjunct's categories as members (`last`).  A tail
+starting at `m` and a `conj` or a bare `complete` edge ending at `m` with
+the same `gaps` make a longer tail with `log p_more` (plus `log p_bare`
+for a bare conjunct), members united; a coordination may not be a bare
+middle conjunct (it would duplicate the nested analysis).  Both are
+subject to `coordinable`: the members must all be licensed in one and
+the same slot somewhere in the grammar (CGEL's condition applied at
+formation, so that coordinations no slot could take are never built).
 
-**COORD.**  `arg[i][k][(Coordination/cats, gaps, ())]` from a first
-conjunct `(X, gaps, ())` and a tail with the same `gaps` (across the
-board); `cats` is the set of the conjuncts' categories, carried in the
-chart category (`Coordination/NP+PP`) while the tree node is plain
-`Coordination`.  The conjuncts need not share a category: CGEL's condition
-(ch. 15 §3.1) is likeness of *function*, and it is enforced where the
-coordination is attached (**Attach** below) by requiring every member
-category to be licensed in the slot it fills.  A coordination at the root
-needs every member rootable.  No further term is added (§9).
+**COORD (`coordinate`).**  A `complete` first conjunct ending at `m` and
+a tail starting at `m` with the same `gaps` (across the board): a
+`complete` coordination, members united and `coordinable`.  The
+conjuncts need not share a category: CGEL's condition (ch. 15 §3.1) is
+likeness of *function*, and it is enforced where the coordination is
+attached (**Attach** above) by requiring every member category to be
+licensed in the slot it fills.  A coordination at the root needs every
+member rootable.  No further term is added (§9).
 
-**Root.**  The best `arg[0][n]` key with `gaps == ()` and base category in
-`ROOT_CATS`; or, outside `dependent` mode, the best such `conj[0][n]` key
-(a clause-initial *and*/*but*/*so*).
+**Root.**  The best `complete` edge over `[0, n)` with `gaps == ()` and
+base category in `ROOT_CATS`; or, outside `dependent` mode, the best such
+`conj` edge (a clause-initial *and*/*but*/*so*).
 
-### 5.4 Loop order
+### 5.4 The agenda
 
-For footprint `F = 1 … n`, in this order: all `arg[i][i+F)` cells (leaf,
-head combination, MARK, COORD), then `conj` and `tail` cells of footprint
-`F`, then `left` chains with `h − i = F`, then `right` chains with `k − h
-− 1 = F`.  Head combination at `F` uses `left`/`right` of smaller
-footprint; MARK uses `arg` of footprint `F − 1`; COORD uses `arg` and
-`tail` of smaller footprint; `tail` at `F` uses `conj` at `F` (computed
-just before) and smaller cells; the chains at `F` use `arg` of footprint
-`≤ F` (computed earlier in the same iteration) and chains of smaller
-footprint.
+The agenda is a heap keyed by span size and then by `RANK`: `R` chains
+before `complete` edges before `L` chains before `conj` before `tail`.
+Every derivation has tails of strictly smaller span except four: the
+constituent made by joining a head's empty left base with its right
+chain (same span as the chain: `R < complete`); the left chain made by
+attaching a dependent to the empty left base (same span as the
+dependent: `complete < L`); a constituent becoming a conjunct in
+`dependent` mode (`complete < conj`); a conjunct becoming a one-conjunct
+tail (`conj < tail`).  So every derivation of an edge exists before the
+edge is popped, the score of a tail is final when a derivation is
+scored, and Viterbi (`max`), inside (`sum`) and outside (the reverse of
+`derivs`) are three folds over the same derivation table.
 
 ### 5.5 Complexity, and the length bound
 
@@ -372,22 +415,25 @@ corpus-wide checks to sentences of at most 12 tokens.
 
 ## 6. Reconstruction (`_Rebuilder`)
 
-### 6.1 Backpointers
+### 6.1 Derivations
 
-| cell / rule | backpointer |
+`Chart.back[id]` is the best derivation of an edge, a tuple naming the
+rule and the tail ids:
+
+| rule | derivation |
 |---|---|
-| base | `("base", L)` (L may be `GAP/X`) |
+| base | `("base", L)` (`L` a `Cat`, `GAP/X` for a gap head) on the left edge |
 | leaf | `("leaf", X or None)` |
-| attach | `(m, dependent key, f, inner key)` |
-| head combination | `("head", h, left key, right key)` |
-| MARK | `("mark", X, gaps)` |
-| COORD | `("coord", m, conjunct key)` |
-| conj | `("conj", body key)` or `("conj-arg",)` |
-| tail | `("last",)` or `("more", m, "conj"|"arg")` |
+| attach | `("attach", f, chain id, dependent id)` |
+| join | `("join", left id, right id)` |
+| MARK | `("mark", body id, X)` |
+| COORD | `("coord", first conjunct id, tail id)` |
+| conj | `("conj", body id)` or `("conj-arg", body id)` |
+| tail | `("last", conjunct id)` or `("more", conjunct id, tail id)` |
 
-`chain_deps` walks a side chain back to the base, collecting `(f, node)`
-in surface order; `_base_key` recovers the base key (and so the head's
-`L`, needed to pick the chain for expansion).
+`_Rebuilder.chain` walks a side chain back to its base, collecting `(f,
+node)` in surface order, and returns the base's `L` (needed to pick the
+chain for expansion).
 
 ### 6.2 Unary re-expansion (`expand`)
 
@@ -481,9 +527,9 @@ The chart is driven by a feature-weighted score.  Every edge of every
 rule in §5.3 carries a list of features (`feature_weights` names them:
 `proj`, `leaf`, `stop`, `dep`, `mark`/`markk`, `conj`, `coord`), its
 weight is the sum of their weights, and the `Chart` class runs the same
-rule loops in either of two semirings: `max` (Viterbi, with
-backpointers) or `sum` (inside masses, with every edge recorded for an
-outside pass).  The weights are initialised to the log relative
+rules in either of two semirings: `max` (Viterbi, with the best
+derivation kept) or `sum` (inside masses, with every derivation recorded
+for an outside pass).  The weights are initialised to the log relative
 frequencies of the tables in §4, so the untrained model is the parser
 described above.
 
@@ -541,20 +587,20 @@ recorded edges; training is therefore restricted to sentences of at most
 Result (5-fold CV, 12 epochs): LAS 0.506 → 0.523, UAS 0.572 → 0.592,
 coordination brackets 47 → 52 of 129, gaps filled 14 → 19 of 119.
 
-### 9a. The chart to come
+### 9a. The active chart (done)
 
-The present chart (five parallel span grids of dicts, positional tuple
-keys, rule-specific backpointers, an edge list for the outside pass) is
-to be replaced by the active-chart organisation: an edge is `(id, label,
-start, end, needed)`, deduplicated as a set member; scores and backtraces
-are tables keyed by id; completed edges are indexed by start and partial
-edges by the boundary they grow at, so the fundamental rule is an array
-lookup; and all state lives in the label (a category record with its
-features, the gap state, the pending binders, the once-only functions),
-where a field earns its place by a rule that reads it.  Viterbi, inside
-and outside become three folds over the same derivation table.  The
-acceptance test is identity with the numbers in the note on the
-sentences the length bound admits.
+The chart of the first draft (five span grids of dicts, positional tuple
+keys with the coordination's members and the gap category encoded in
+category strings, rule-specific backpointers) was replaced by the
+organisation in §5.1–5.4 in October 2026.  The acceptance test was
+identity with the first draft: on every sentence of at most 20 tokens
+the Viterbi score and `log Z` agree to 1e-9, except on ten sentences
+where the only difference is in nested coordination, which the string
+label could not state consistently: a coordinator-marked conjunct may now
+itself be a coordination (two in the treebank; impossible before), and a
+nested first conjunct's members are all checked against a common slot
+(before, they were skipped).  Trees differ only where two derivations
+tie exactly (§5.5).  The held-out numbers are in the note, §8.
 
 ## 10. Switches
 
@@ -604,7 +650,7 @@ dependency right its score equals the gold feature score, and the gold
 score never exceeds `log Z` on the support; three epochs of fitting raise
 the conditional likelihood of the training sentences.
 
-Twelve tests, about 15 s: per-side normalisation and per-head projection
+Fourteen tests, about 15 s: per-side normalisation and per-head projection
 normalisation; markers never heads or dependents in `schema` mode; every
 gap accounted for by an event or a reported skip; every parse of a short
 sentence preserves its tokens and gap count; coordination output shape
@@ -613,6 +659,10 @@ first in a clause or VP; every gap in every short parse is bound to a
 binder of its category; filling *would this — be fine* puts *would* at
 the VP head; across-the-board sharing gives one index per coordination;
 a lone gap has no parse while `V_aux GAP` forces the auxiliary into
-`Prenucleus`; the COORD switch; all three marker modes run and normalise.
+`Prenucleus`; the COORD switch; all three marker modes run and normalise;
+the agenda order is topological (every tail ranks before its head and
+every derivation of an edge precedes its first use); a marked conjunct
+may be a coordination and members are never coordinations (fourteen
+tests in all).
 The linking and filling pass was also exercised on hand-built trees for
 inversion, a relative clause, shared objects and two simultaneous gaps.

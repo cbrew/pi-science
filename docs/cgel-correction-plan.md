@@ -109,7 +109,7 @@ the level chart of the earlier draft.
 | 5 | B2 constraints in the chart, one at a time, frame feature off | repeated-argument count and LAS on sentences ≤ 14 tokens after each (done: repeats 80 → 0; LAS 0.574 → 0.591 with once-only and finite subject; complement licensing by head class +0.008) |
 | 6 | coordination by CGEL's condition (alike in function; category difference tolerated) | the unlike-category cases (done: support 168 → 175 of 220; 5 of the 6 short unlike cases in the chart) |
 | 7 | full evaluation and Model B fit on the corrected chart, sentences ≤ 32 tokens (two excluded, stated) | held-out LAS and gap filling, with the support test (done: LAS 0.534 unfitted, 0.577 fitted; gaps filled 29 → 40 of 117) |
-| 8 | the active chart (design document §9a) | identity with step 7's numbers |
+| 8 | the active chart (design document §5, §9a) | identity with step 7: Viterbi score and log Z equal on every sentence ≤ 20 tokens except ten with nested coordination (done; the deviations and the numbers are in the design document §9a and the note §8) |
 
 Steps 1–4 touch no parsing rule; step 4 is done and is what makes step 5
 well defined.

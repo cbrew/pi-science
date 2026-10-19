@@ -229,6 +229,43 @@ class TestParser(unittest.TestCase):
         self.assertIsNotNone(self._parse(s))
         self.assertIsNone(self._parse(s, coord=False))
 
+    def test_agenda_order_is_topological(self):
+        # every derivation's tails rank strictly before its head edge, and
+        # every derivation of an edge is recorded before any derivation
+        # that consumes the edge (so scores are final when read)
+        for sub in ("help me prepare lunch", "would this -- be fine",
+                    "fire alarm and strobe light"):
+            s = find(sub)
+            ch = P.Chart(self.g, sentence_tokens(s), sentence_words(s),
+                         mode="sum", record=True).run()
+            last_made, first_used = {}, {}
+            for j, (eid, tails, _feats) in enumerate(ch.derivs):
+                e = ch.edges[eid]
+                order = (e.end - e.start, P.RANK[e.needed])
+                last_made[eid] = j
+                for tid in tails:
+                    te = ch.edges[tid]
+                    self.assertLess((te.end - te.start, P.RANK[te.needed]), order,
+                                    (sub, te, e))
+                    first_used.setdefault(tid, j)
+            for eid, j in first_used.items():
+                self.assertLess(last_made[eid], j, (sub, ch.edges[eid]))
+
+    def test_coordination_members_are_structured(self):
+        # a marked conjunct may itself be a coordination ("A and [B or C]"),
+        # and a nested coordination's members flatten into its parent's,
+        # so no member is ever a Coordination
+        ch = P.Chart(self.g, ["N", "Coordinator", "N", "Coordinator", "N"],
+                     ["a", "and", "b", "or", "c"], mode="sum").run()
+        nested = [e for e in ch.edges if e.needed == P.CONJ and len(e.label.members) >= 1
+                  and e.label.cat is P.COORDINATION]
+        self.assertTrue(nested)
+        for e in ch.edges:
+            for m in e.label.members:
+                self.assertNotEqual(m.base, "Coordination", e)
+            if e.label.cat is P.COORDINATION and e.needed == P.COMPLETE:
+                self.assertTrue(e.label.members, e)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=1)
