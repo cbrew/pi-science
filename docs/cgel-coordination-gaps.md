@@ -271,17 +271,22 @@ not a term to tune.
 
 Numbers below are on the corrected chart (`cgel-correction-plan.md`:
 finiteness classes, the once-only, finite-subject and complement-licensing
-rules, CGEL's coordination condition), five-fold cross-validation, on the
-218 sentences of at most 32 tokens; the two longer ones are excluded by the
-author's decision and reported as such (design document §5.6).  The chart
-was rebuilt as an active chart over structured labels in October 2026
-(design document §5, §9a); the first chart's rows are kept below it for
-the record.
+rules, CGEL's coordination condition), five-fold cross-validation.  The
+chart was rebuilt as an active chart over structured labels in October
+2026 (design document §5, §9a), and then made to build each head's right
+side before its left so that a left binder never waits (§5.3); with that,
+every sentence parses and nothing is excluded.  The rows on the 218
+sentences of at most 32 tokens (the two longest were excluded while they
+were infeasible) are kept for comparison, as are the first chart's.
 
 ```
                                         parsed   LAS    UAS   collapsed  coord.    gaps filled
                                                               bracket F1 brackets  w/ gold material
-active chart, ties by late closure (design document §5.5):
+active chart, right side first, all 220 sentences:
+self-fit, relative-frequency weights    219/220  0.558  0.635   0.587     32/130    36/119
+5-fold CV, relative-frequency weights   218/220  0.543  0.619   0.571     29/129    31/119
+
+active chart, two-sided chains, ties by late closure, sentences <= 32 tokens (2 excluded):
 self-fit, relative-frequency weights    217/218  0.560  0.639   0.594     32/127    36/117
 5-fold CV, relative-frequency weights   216/218  0.543  0.622   0.578     29/126    32/117
   COORD off                             118/218  0.516  0.595   0.575      0/6      24/73
@@ -293,6 +298,7 @@ self-fit, relative-frequency weights    217/218  0.560  0.639   0.594     32/127
   markers = feature                     212/218  0.550  0.627   0.583     28/123    33/109
   markers = dependent                   216/218  0.540  0.619   0.563     27/126    33/117
 5-fold CV, fitted (Model B)             216/218  0.588  0.641   0.595     33/126    41/117
+  (right side first, same 218)          216/218  0.543  0.619   0.573     29/126    31/117   unfitted
 
 first chart (ties by loop order; nested coordination inconsistent):
 self-fit, relative-frequency weights    217/218  0.556  0.632   0.592     32/127    35/117
@@ -352,10 +358,10 @@ How to read this:
   is normalised over are now the right ones.  Support: 8–13 training
   sentences per fold fall out at extraction (a coordination heading a
   phrase), at most one more by the gold-above-Z test.
-* **Gap sentences remain the hardest** (0.48 by type).  The 34- and
-  36-token sentences are excluded, not failed; the chart's gap–binder
-  state product is the reason, and the active-chart rebuild is the
-  remedy.
+* **Gap sentences remain the hardest** (0.48–0.50 by type).  The two
+  longest sentences (38 and 33 tokens), excluded while the chart's
+  gap–binder state product made them infeasible, now parse in under a
+  minute (design document §5.6); the numbers on all 220 are the headline.
 * **Markers**: the three settings are within 0.013 LAS; `feature` is
   slightly best and loses four sentences of coverage.  Still open.
 
