@@ -60,7 +60,7 @@ def layer(head_class: str, head_pos: int, deps: Sequence[Dep], top: str,
     attached there, sorted).  ``top`` is the category the context requires
     (``NP`` or ``Nom``, ``Clause`` or ``Clause_rel``, ``PP`` or
     ``PP_strand``); ``marker_words`` maps a Marker's position to its word."""
-    base = BASE.get(head_class, head_class)
+    base = BASE.get(head_class.split(":")[0], head_class)   # V:fin -> V
     if base == "PP" and top == "PP_strand":
         base = "PP_strand"
     rel = top == "Clause_rel"
