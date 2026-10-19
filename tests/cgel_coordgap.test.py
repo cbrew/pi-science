@@ -17,6 +17,7 @@ from cgel_coordgap import (BINDERS, GAP, MARKERS, _chain_top, binder_label,
 
 CGEL = Path(__file__).resolve().parent.parent / "cgel"
 import cgel_coordgap as _P
+import cgel_coordgap as P
 SENTENCES = _P.load_corpus()          # with the data interventions applied
 
 
@@ -108,7 +109,20 @@ class TestParser(unittest.TestCase):
             conj = [c for c in co.children if c.edge == "Coordinate"]
             self.assertEqual(len(conj), len(co.children))
             self.assertGreaterEqual(len(conj), 2)
-            self.assertEqual(len({c.cat for c in conj}), 1, "like conjuncts")
+            # CGEL's condition: alike in function, not necessarily in
+            # category -- every conjunct's category must be licensed in the
+            # slot the coordination fills
+            parent = next((n for n in pr.tree.iter_nodes() if co in n.children), None)
+            if parent is not None and co.edge:
+                head = next(h for h in P.head_chain(parent) if h is not parent) \
+                    if P.head_chain(parent) else None
+                C = parent.cat
+                side = "L" if head is not None and P.leaf_positions(pr.tree).get(co, 0) \
+                    < P.leaf_positions(pr.tree).get(P.head_chain(parent)[-1], 0) else "R"
+                licensed = self.g.dep.get((C, side), {})
+                for c in conj:
+                    self.assertTrue((co.edge, c.cat) in licensed or c.cat == "Coordination",
+                                    (co.edge, c.cat, C, side))
             last = conj[-1]
             self.assertEqual(last.children[0].edge, "Marker")
             self.assertEqual(last.children[0].cat, "Coordinator")

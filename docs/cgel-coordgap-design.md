@@ -230,7 +230,9 @@ Keys are `(C, gaps, binders)`:
 * `binders` is the sorted tuple of binder categories attached on this
   side chain whose gap lies on the *other* side of the head (or in the
   head slot); it is non-empty only in `left`/`right` cells and is always
-  empty on a complete constituent.
+  empty on a complete constituent;
+* side keys carry a fourth element, the once-only functions already
+  attached on that side.
 
 Both tuples are bounded by `maxgap` (2 by default).  With
 `slash=False` both are always empty.
@@ -270,8 +272,14 @@ gives `arg[i][i+1][(L, (), ())] = log P(<leaf> | L)` when `L` has a
 `<leaf>` outcome (name pieces).
 
 **Attach (left and right chains).**  `attach(C, side, …)` extends a chain
-item `(C, g0, b0)` by one complete dependent `(D, gd, ())` with function
-`f` and emission `P(f, D | C, side)`:
+item `(C, g0, b0, used)` by one complete dependent `(D, gd, ())` with
+function `f` and emission `P(f, D | C, side)`, subject to four structural
+rules, each a switch for ablation: `once` (a head takes `Subj`, `Det`,
+`Obj`, `PredComp` at most once; `used` on the side key records which it
+has), `finite` (a `Subj` only on a finite head: `V:fin`, `V_aux:fin`,
+`V_aux:mod`, or the inverted-auxiliary slot), `license` (a complement
+function only on a head class the treebank shows taking it), and, for a
+coordination dependent, every member category licensed for `f`.  Then:
 
 ```
 gaps, binders = g0 + gd, b0
@@ -315,11 +323,15 @@ non-final conjunct `arg[i][m] + log p_bare + tail[m][k] + log p_more`
 (a `Coordination` may not be a bare middle conjunct, to avoid
 left-recursive duplicates).
 
-**COORD.**  `arg[i][k][(Coordination, gaps, ())] = arg[i][m][key] +
-tail[m][k][key]` for every `key = (X, gaps, ())` whose base category is
-an observed conjunct category.  Requiring the same key on both sides is
-the like-category rule and the across-the-board rule in one line.  No
-further term is added (§9).
+**COORD.**  `arg[i][k][(Coordination/cats, gaps, ())]` from a first
+conjunct `(X, gaps, ())` and a tail with the same `gaps` (across the
+board); `cats` is the set of the conjuncts' categories, carried in the
+chart category (`Coordination/NP+PP`) while the tree node is plain
+`Coordination`.  The conjuncts need not share a category: CGEL's condition
+(ch. 15 §3.1) is likeness of *function*, and it is enforced where the
+coordination is attached (**Attach** below) by requiring every member
+category to be licensed in the slot it fills.  A coordination at the root
+needs every member rootable.  No further term is added (§9).
 
 **Root.**  The best `arg[0][n]` key with `gaps == ()` and base category in
 `ROOT_CATS`; or, outside `dependent` mode, the best such `conj[0][n]` key
@@ -525,6 +537,7 @@ coordination brackets 47 → 52 of 129, gaps filled 14 → 19 of 119.
 | `maxgap` | `parse` | 2 | bound on open gaps and pending binders |
 | `coord` | `parse` | `True` | COORD rule on/off |
 | `slash` | `parse` | `True` | gap tuples kept/zeroed (gaps become plain tokens) |
+| `once`, `finite`, `license` | `parse` | `True` | the structural rules of §5.3 **Attach** |
 | `alpha` | `build_grammar` | 1.0 | smoothing of the initial weights |
 | `--maxtok`, `--epochs`, `--lr`, `--l2` | `cgel_coordgap_fit.py --fit` | 16, 10, 0.05, 0.1 | training-set length bound, epochs, Adam step, L2 pull towards the start |
 
@@ -539,6 +552,14 @@ coordination brackets 47 → 52 of 129, gaps filled 14 → 19 of 119.
   `Prenucleus`/`Postnucleus`), true of every such binder in the corpus.
   Lowered gap filling on the short sentences; removed.  Under a properly
   normalised model it would return as a constraint.
+* **A valency frame feature** (the multiset of a head's argument
+  functions, keyed by the folded category).  Not lexicalised, pooled the
+  X-bar levels, and in its unbounded form multiplied the chart's keys by
+  sixty at ten tokens; bounded to attested frames it still coupled
+  independent decisions.  Replaced by the structural rules of §5.3.
+* **Like-category coordination.**  Replaced by CGEL's like-function
+  condition (§5.3 COORD), which brings the unlike-category cases into the
+  support.
 * **Markers as leaf dependents** of the split-head tables as the default.
   Kept as `markers="dependent"` for comparison; it builds fewer
   coordination brackets (30 against 48 of 129 under cross-validation),

@@ -81,10 +81,15 @@ chart, the constraints the layers encode:
 * a head's complements are licensed by its class at the layer over the
   word, which is where valency lives and where `N_c`/`Adj_c` act;
 * modifiers are not limited, one per layer;
-* a coordination's conjuncts fill one function slot (CGEL's condition is
-  likeness of function; CGELBank reads the coordination's nature off the
-  conjuncts' categories; to be settled with the author, step 4 of the
-  working list);
+* a coordination's conjuncts fill one function slot: CGEL's condition
+  (ch. 15 §3.1, "alike in function", a difference of category tolerated)
+  is enforced by requiring every conjunct's category to be licensed in
+  the slot the coordination fills; the conjuncts share their gap state
+  (across the board) but not their category.  Chosen over CGELBank's
+  category reading on the author's decision;
+* a head's complements are licensed by its class (CGEL ch. 4 §1.2), the
+  licensing set read off the treebank per class, which is where
+  `N_c`/`Adj_c` and the finiteness classes act;
 * gaps keep their category-carrying discharge, with the constructions
   (subject–auxiliary inversion, subject–dependent inversion, delayed right
   constituent coordination, relativisation, preposing, postposing)
@@ -101,8 +106,8 @@ the level chart of the earlier draft.
 | 2 | A2 finiteness classes | per-class argument table |
 | 3 | A3 lemma and punctuation carried | none |
 | 4 | B1 layering function | gold chain reproduced for ≥ 95% of heads; residue listed (done: 96.8%) |
-| 5 | B2 constraints in the chart, one at a time, frame feature off | repeated-argument count and LAS on sentences ≤ 14 tokens after each |
-| 6 | coordination condition, after settling CGEL against CGELBank | the nine unlike-category cases |
+| 5 | B2 constraints in the chart, one at a time, frame feature off | repeated-argument count and LAS on sentences ≤ 14 tokens after each (done: repeats 80 → 0; LAS 0.574 → 0.591 with once-only and finite subject; complement licensing by head class +0.008) |
+| 6 | coordination by CGEL's condition (alike in function; category difference tolerated) | the unlike-category cases (done: support 168 → 175 of 220; 5 of the 6 short unlike cases in the chart) |
 | 7 | Model B fit on the corrected chart | held-out LAS and gap filling, with the support test |
 
 Steps 1–4 touch no parsing rule; step 4 is done and is what makes step 5

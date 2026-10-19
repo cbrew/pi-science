@@ -77,8 +77,17 @@ fill.  In the chart it is built from complete constituents; the head-driven
 tables are not involved.  It is scored by the conjunct scores, a geometric
 length term and a bare-conjunct term (§7 says what that amounts to).
 
-Not covered, deliberately: unlike-category coordination (9 of 131; a parse
-is produced with a wrong label), initial-marker correlatives (3), a
+The condition on the conjuncts is CGEL's (ch. 15 §3.1): they must be
+alike in function, and "a difference of category is generally tolerated
+where there is likeness of function".  The chart enforces exactly that:
+every conjunct's category must be licensed in the slot the coordination
+fills, and the conjuncts share their gap state but not their category.
+(An earlier version required like categories, after CGELBank's practice
+of reading a coordination's nature off its conjuncts' categories; the
+author chose CGEL's condition, and the unlike-category cases, 9 of 131,
+returned to the support.)
+
+Not covered, deliberately: initial-marker correlatives (3), a
 `Supplement` inside a `Coordination` (2), *etc.* (1), and **a
 `Coordination` as the head of a larger phrase** (29 nodes: *the* [*crew and
 cargo*], *'ll* [*call and …*]).  The last is the largest gap: the chart's
@@ -259,6 +268,11 @@ a properly normalised model it would be a constraint like the others,
 not a term to tune.
 
 ## 8. Implementation and results (`cgel_coordgap.py`)
+
+*The table below is from the chart before the corrections recorded in
+`cgel-correction-plan.md` (finiteness classes, the once-only, finite-subject
+and complement-licensing rules, CGEL's coordination condition); it is kept
+until the re-evaluation on the corrected chart replaces it.*
 
 Besides the three devices, three choices keep the output comparable to the
 treebank: function labels are kept in the emission tables (so binders are

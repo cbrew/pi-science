@@ -128,8 +128,9 @@ MARKERS = frozenset({"Sdr", "Coordinator"})
 BINDERS = frozenset({"Prenucleus", "Postnucleus", "Head-Prenucleus"})
 NOMINAL = frozenset({"NP", "Nom"})
 CLAUSAL = frozenset({"Clause", "Clause_rel"})
-ROOT_CATS = frozenset({"Clause", "Coordination", "NP", "VP", "Nom", "AdjP",
-                       "PP", "AdvP", "IntP", "Clause_rel", "DP"})
+ROOT_CATS = frozenset({"Clause", "Coordination", "NP", "VP", "Nom", "AdjP"})
+# the categories a tree may be rooted in: the six observed in the treebank
+# (Clause 167, Coordination 34, NP 16, VP, Nom, AdjP once each)
 MAXGAP = 2
 NOGAPS: Tuple[str, ...] = ()
 # functions a head takes at most once.  The treebank never repeats Subj,
@@ -143,6 +144,12 @@ ONCE = frozenset({"Subj", "Det", "Obj", "PredComp"})
 # head classes that license a subject: finite verbs and auxiliaries, modals,
 # and the inverted auxiliary's slot
 FINITE = frozenset({"V:fin", "V_aux:fin", "V_aux:mod", GAP})
+# complement functions: licensed by the head's class (CGEL ch. 4 §1.2: a
+# complement "require[s] the presence of an appropriate verb that licenses
+# it"); the licensing set is read off the treebank per class
+COMPLEMENT = frozenset({"Obj", "Obj_ind", "Obj_dir", "Comp", "Comp_ind",
+                        "PredComp", "Particle", "DisplacedSubj", "ExtraposedSubj",
+                        "Obj+Mod", "Obj+PredComp/Comp"})
 
 
 def gap_label(X: str) -> str:
@@ -151,6 +158,20 @@ def gap_label(X: str) -> str:
 
 def is_gap_label(D: str) -> bool:
     return D.startswith(GAP + "/")
+
+
+def coord_label(cats) -> str:
+    """Chart category of a coordination whose conjuncts have these
+    categories: ``Coordination/NP+PP``.  The tree node is plain
+    ``Coordination``; the set is carried so that, when the coordination is
+    attached, each conjunct's category can be checked against the function
+    slot it fills (CGEL: coordinates must be alike in function; a
+    difference of category is tolerated)."""
+    return "Coordination/" + "+".join(sorted(cats))
+
+
+def coord_members(D: str):
+    return D.split("/", 1)[1].split("+") if D.startswith("Coordination/") else None
 
 
 def binder_label(D: str) -> str:
@@ -344,8 +365,7 @@ def iter_events(s: Sentence, markers: str = "schema"):
                            if not any(k.edge == "Marker" for k in c.children))
                 # in the chart's support only if the conjuncts share a
                 # category and nothing but conjuncts is inside
-                ok = (len({c.cat for c in conj}) == 1
-                      and len(conj) == len(n.children))
+                ok = len(conj) == len(n.children)     # CGEL: like function, not category
                 yield ("coord", conj[0].cat, len(conj), bare, ok)
             continue
         if n.edge == "Marker" and n.cat in MARKERS and n in parent:
@@ -420,11 +440,17 @@ class Grammar:
         chains = defaultdict(Counter)      # (C, L) -> chain
         levels = defaultdict(Counter)      # (C, f, word|None) -> level cat
         self.skipped = Counter()
+        self.licensed: set = set()          # (head class, complement function)
         for s in sentences:
             for ev in iter_events(s, markers):
                 if ev[0] == "proj":
                     _, C, L, left, right, chain, lv = ev
                     proj[L][C] += 1
+                    for f, _D in left + right:
+                        if f in COMPLEMENT:
+                            self.licensed.add((L, f))
+                            if is_gap_label(L):          # the chart sees the slot as GAP
+                                self.licensed.add((GAP, f))
                     for side, seq in (("L", left), ("R", right)):
                         dep[(C, side)][""] += 1
                         for fd in seq:
@@ -565,9 +591,10 @@ class Chart:
     def __init__(self, g: "Grammar", ts: Sequence[str],
                  words: Optional[Sequence[str]] = None, maxgap: int = MAXGAP,
                  coord: bool = True, slash: bool = True, mode: str = "max",
-                 record: bool = False, once: bool = True, finite: bool = True):
+                 record: bool = False, once: bool = True, finite: bool = True,
+                 license: bool = True):
         self.g, self.ts = g, list(ts)
-        self.once, self.finite = once, finite
+        self.once, self.finite, self.license = once, finite, license
         self.n = len(self.ts)
         self.words = list(words) if words else [None] * self.n
         self.maxgap, self.coord, self.slash = maxgap, coord, slash
@@ -621,11 +648,19 @@ class Chart:
             if not emit:
                 return
             head_class = ts[h]
+            licensed = g.dep.get((C, side), {})
             for dkey, _dv in D_cell.items():
                 D, gd, _bd = dkey
-                fs = emit.get(D)
+                members = coord_members(D)
+                fs = emit.get("Coordination" if members else D)
                 if not fs:
                     continue
+                if members:
+                    fs = [(f, p) for f, p in fs
+                          if all((f, X) in licensed or X.startswith("Coordination")
+                                 for X in members)]
+                    if not fs:
+                        continue
                 for ikey in inner:
                     C0, g0, b0, used0 = ikey
                     if C0 != C:
@@ -635,6 +670,9 @@ class Chart:
                             continue                      # at most once per head
                         if self.finite and f == "Subj" and head_class not in FINITE:
                             continue                      # a finite head licenses it
+                        if self.license and f in COMPLEMENT \
+                                and (head_class, f) not in g.licensed:
+                            continue                      # the head class licenses it
                         gaps, binders = g0 + gd, b0
                         if f in BINDERS:
                             if gd:                        # a binder is gap-free
@@ -655,7 +693,8 @@ class Chart:
                             if (self.once and f in ONCE) else used0
                         edge(cell, (C, gaps, binders, used),
                              [(inner, ikey), (D_cell, dkey)],
-                             [("dep", C, side, f, D)], (m, dkey, f, ikey))
+                             [("dep", C, side, f, "Coordination" if members else D)],
+                             (m, dkey, f, ikey))
 
         # heads: base cells (F = 0)
         for h in range(n):
@@ -711,10 +750,14 @@ class Chart:
                                  [(arg[i + 1][k], (X, gx, _b))], [mf], ("mark", X, gx))
                 for m in range(i + 1, k) if self.coord else ():
                     for key in arg[i][m]:
-                        if key in tail[m][k] and key[0].split("[")[0] in g.coord_cat:
-                            edge(cell, ("Coordination", key[1], NOGAPS),
-                                 [(arg[i][m], key), (tail[m][k], key)], [],
-                                 ("coord", m, key))
+                        X, gx, _b = key
+                        for tkey in tail[m][k]:
+                            if tkey[1] != gx:
+                                continue                  # across the board
+                            cats = set(coord_members(tkey[0])) | {X}
+                            edge(cell, (coord_label(cats), gx, NOGAPS),
+                                 [(arg[i][m], key), (tail[m][k], tkey)], [],
+                                 ("coord", m, key, tkey))
             # ---- marked conjuncts and conjunct tails ------------------------
             for i in range(0, n - F + 1):
                 k = i + F
@@ -731,15 +774,25 @@ class Chart:
                                      [mf, ("conj", "marked")], ("conj", key))
                 tcell = tail[i][k]
                 for key in list(conj[i][k]):
-                    edge(tcell, key, [(conj[i][k], key)], [("coord", "last")], ("last",))
+                    X, gx, _b = key
+                    edge(tcell, (coord_label({X}), gx, NOGAPS), [(conj[i][k], key)],
+                         [("coord", "last")], ("last", key))
                 for m in range(i + 1, k):
-                    for key in tail[m][k]:
-                        if key in conj[i][m]:
-                            edge(tcell, key, [(conj[i][m], key), (tail[m][k], key)],
-                                 [("coord", "more")], ("more", m, "conj"))
-                        if key in arg[i][m] and key[0] != "Coordination":
-                            edge(tcell, key, [(arg[i][m], key), (tail[m][k], key)],
-                                 [("conj", "bare"), ("coord", "more")], ("more", m, "arg"))
+                    for tkey in tail[m][k]:
+                        tcats, gx = set(coord_members(tkey[0])), tkey[1]
+                        for ckey in conj[i][m]:
+                            if ckey[1] != gx:
+                                continue
+                            edge(tcell, (coord_label(tcats | {ckey[0]}), gx, NOGAPS),
+                                 [(conj[i][m], ckey), (tail[m][k], tkey)],
+                                 [("coord", "more")], ("more", m, "conj", ckey, tkey))
+                        for akey in arg[i][m]:
+                            if akey[1] != gx or akey[0].startswith("Coordination"):
+                                continue
+                            edge(tcell, (coord_label(tcats | {akey[0]}), gx, NOGAPS),
+                                 [(arg[i][m], akey), (tail[m][k], tkey)],
+                                 [("conj", "bare"), ("coord", "more")],
+                                 ("more", m, "arg", akey, tkey))
             # ---- left chains: head at h = i + F -----------------------------
             for i in range(0, n - F):
                 h = i + F
@@ -757,7 +810,11 @@ class Chart:
 
         for key in arg[0][n]:
             C, gaps, _b = key
-            if not gaps and C.split("[")[0] in ROOT_CATS:
+            members = coord_members(C)
+            ok = (all(X.split("[")[0] in ROOT_CATS or X.startswith("Coordination")
+                      for X in members) if members
+                  else C.split("[")[0] in ROOT_CATS)
+            if not gaps and ok:
                 self.roots.append((arg[0][n], key, "arg"))
         if g.markers != "dependent":
             for key in conj[0][n]:                      # clause-initial "and"
@@ -786,7 +843,8 @@ def _logaddexp(a: float, b: float) -> float:
 
 def parse(g: Grammar, ts: Sequence[str], words: Optional[Sequence[str]] = None,
           maxgap: int = MAXGAP, coord: bool = True, slash: bool = True,
-          once: bool = True, finite: bool = True) -> Optional[Parse]:
+          once: bool = True, finite: bool = True, license: bool = True
+          ) -> Optional[Parse]:
     """Viterbi parse of a lexical-category sequence (``GAP`` tokens included).
 
     ``coord=False`` switches the COORD schema off, ``slash=False`` the gap
@@ -798,7 +856,7 @@ def parse(g: Grammar, ts: Sequence[str], words: Optional[Sequence[str]] = None,
     if len(ts) == 0:
         return None
     ch = Chart(g, ts, words, maxgap, coord, slash, mode="max",
-               once=once, finite=finite).run()
+               once=once, finite=finite, license=license).run()
     best, bkey, bcell, bkind = LOG0, None, None, None
     for cell, key, kind in ch.roots:
         if cell[key][0] > best:
@@ -843,11 +901,11 @@ class _Rebuilder:
             marker.edge = "Marker"
             return self.expand_marked(X, marker, body)
         if bp[0] == "coord":
-            _, m, ckey = bp
+            _, m, ckey, tkey = bp
             first = self.build("arg", i, m, ckey)
             first.edge = "Coordinate"
             return Node(cat="Coordination",
-                        children=[first] + self.build_tail(m, k, ckey))
+                        children=[first] + self.build_tail(m, k, tkey))
         _, h, lkey, rkey = bp
         C = key[0]
         deps_l = self.chain_deps("L", i, h, lkey)
@@ -864,13 +922,13 @@ class _Rebuilder:
     def build_tail(self, m: int, k: int, key) -> List[Node]:
         _, bp = self.tail[m][k][key]
         if bp[0] == "last":
-            c = self.build("conj", m, k, key)
+            c = self.build("conj", m, k, bp[1])
             c.edge = "Coordinate"
             return [c]
-        _, m2, kind = bp
-        c = self.build(kind, m, m2, key)
+        _, m2, kind, ckey, tkey = bp
+        c = self.build(kind, m, m2, ckey)
         c.edge = "Coordinate"
-        return [c] + self.build_tail(m2, k, key)
+        return [c] + self.build_tail(m2, k, tkey)
 
     def chain_deps(self, side: str, a: int, b: int, key) -> List[Tuple[str, Node]]:
         """Dependents (function, node) of one side in surface order."""
@@ -1221,6 +1279,7 @@ def main() -> None:
                           ("SLASH off", dict(slash=False)),
                           ("ONCE off", dict(once=False)),
                           ("FINITE off", dict(finite=False)),
+                          ("LICENSE off", dict(license=False)),
                           ("maxgap=1", dict(maxgap=1)),
                           ("markers=feature", dict(markers="feature")),
                           ("markers=dependent", dict(markers="dependent"))):
