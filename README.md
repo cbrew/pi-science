@@ -100,11 +100,13 @@ analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
   through coordination, so that each gap is co-indexed with the material
   that fills it (`fill_gaps`).  Gap positions are taken from the input.
   Evaluated by labelled attachment (LAS), collapsed brackets and gap
-  filling: coverage 218/220, LAS 0.51,
-  UAS 0.57, collapsed-bracket F1 0.59, the gold material copied into 15 of
-  119 gaps, all under 5-fold CV.  The score is a product of relative-frequency
-  tables under hard constraints, not a probability model; the note says
-  why and what the correct estimator is.
+  filling: coverage 218/220, LAS 0.51, UAS 0.57, collapsed-bracket F1
+  0.59, the gold material copied into 15 of 119 gaps, all under 5-fold
+  CV.  `cgel_coordgap_fit.py` is Model B over the chart: a conditional
+  log-linear model normalised over the chart's own analyses (inside and
+  outside passes, exact expectations) and fitted by conditional maximum
+  likelihood; fitting on short sentences lifts held-out LAS to 0.52 and
+  gaps filled to 19 of 119.
 * **CYK parser** — `docs/cgel-headcyk.md` and `cgel_headcyk.py`: a
   head-driven (Eisner/Collins-style) parser that builds each constituent
   outward from its head using the split-head generative tables.  More than
@@ -120,5 +122,6 @@ python3 cgel_splithead.py
 python3 cgel_headcyk.py --eval
 python3 cgel_coordgap_survey.py
 python3 cgel_coordgap.py --eval --ablate
-python3 tests/cgel_coordgap.test.py && python3 tests/cgel_headcyk.test.py && python3 tests/cgel_splithead.test.py && python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
+python3 cgel_coordgap_fit.py --check && python3 cgel_coordgap_fit.py --fit
+python3 tests/cgel_coordgap.test.py && python3 tests/cgel_coordgap_fit.test.py && python3 tests/cgel_headcyk.test.py && python3 tests/cgel_splithead.test.py && python3 tests/cgel_models.test.py && python3 tests/cgel_reader.test.py
 ```
