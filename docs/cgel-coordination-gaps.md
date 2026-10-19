@@ -285,6 +285,14 @@ were infeasible) are kept for comparison, as are the first chart's.
 active chart, right side first, all 220 sentences:
 self-fit, relative-frequency weights    219/220  0.558  0.635   0.587     32/130    36/119
 5-fold CV, relative-frequency weights   218/220  0.543  0.619   0.571     29/129    31/119
+  COORD off                             118/220  0.516  0.594   0.565      0/6      24/73
+  SLASH off (gaps plain tokens)         218/220  0.535  0.615   0.581     29/129     0/119
+  ONCE off                              218/220  0.531  0.592   0.585     33/129    22/119
+  FINITE off                            218/220  0.517  0.592   0.564     28/129    28/119
+  LICENSE off                           218/220  0.521  0.600   0.565     30/129    33/119
+  maxgap = 1                            218/220  0.541  0.619   0.573     29/129    31/119
+  markers = feature                     214/220  0.547  0.624   0.576     28/126    32/111
+  markers = dependent                   218/220  0.540  0.617   0.558     27/129    33/119
 5-fold CV, fitted (Model B)             218/220  0.586  0.637   0.590     33/129    41/119
 
 active chart, two-sided chains, ties by late closure, sentences <= 32 tokens (2 excluded):
@@ -349,8 +357,8 @@ How to read this:
   alone is worth two and a half points, the licensing rule two, the
   once-only rule one and a half, the gap discipline half a point on LAS
   but all of the gap filling.  One open gap instead of two costs nothing
-  on this corpus (0.546 against 0.543, within the noise), which bears on
-  the state-space step.
+  on this corpus (0.541 against 0.543 on all 220, within the noise); the
+  19 heads that need two are kept because the construction is real.
 * **Coordination brackets fell** from 48 to 28 of 129: CGEL's condition
   admits more coordinations and the unfitted weights rank them badly; the
   fit recovers some (32) and the rest is the next thing to look at.
