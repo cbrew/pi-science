@@ -106,6 +106,8 @@ def gold_features(s: Sentence, g: Grammar) -> Optional[Counter]:
         if ev[0] == "proj":
             _, C, L, left, right, _chain, _lv = ev
             c[("proj", L, C)] += 1
+            fr = ("frame", C, P.frame_of(f for f, _ in left + right))
+            c[fr if fr in g.w else ("frame-unseen", C)] += 1
             for side, seq in (("L", left), ("R", right)):
                 c[("stop", C, side)] += 1
                 for f, D in seq:
