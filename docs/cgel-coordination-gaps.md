@@ -273,11 +273,19 @@ Numbers below are on the corrected chart (`cgel-correction-plan.md`:
 finiteness classes, the once-only, finite-subject and complement-licensing
 rules, CGEL's coordination condition), five-fold cross-validation, on the
 218 sentences of at most 32 tokens; the two longer ones are excluded by the
-author's decision and reported as such (design document §5.6).
+author's decision and reported as such (design document §5.6).  The chart
+was rebuilt as an active chart over structured labels in October 2026
+(design document §5, §9a); the first chart's rows are kept below it for
+the record.
 
 ```
                                         parsed   LAS    UAS   collapsed  coord.    gaps filled
                                                               bracket F1 brackets  w/ gold material
+active chart, ties by late closure (design document §5.5):
+self-fit, relative-frequency weights    217/218  0.560  0.639   0.594     32/127    36/117
+5-fold CV, relative-frequency weights   216/218  0.543  0.622   0.578     29/126    32/117
+
+first chart (ties by loop order; nested coordination inconsistent):
 self-fit, relative-frequency weights    217/218  0.556  0.632   0.592     32/127    35/117
 5-fold CV, relative-frequency weights   216/218  0.534  0.612   0.579     28/126    29/117
   COORD off                             118/218  0.510  0.587   0.579      0/6      22/73
@@ -302,6 +310,21 @@ before the corrections (same folds):    218/220  0.505  0.568   0.587     48/129
 `python3 cgel_coordgap_fit.py --fit`, about 19 minutes.)
 
 How to read this:
+
+* **The active chart is the same model.**  On every sentence of at most
+  20 tokens its Viterbi score and log Z equal the first chart's to 1e-9,
+  except on ten sentences where only nested coordination differs (a
+  coordinator-marked conjunct may now itself be a coordination; a nested
+  first conjunct's members are all checked against a common slot).  What
+  moved the numbers is **ties**: 86 of the 218 sentences have two Viterbi
+  trees of exactly equal score, typically a dependent on a head or inside
+  that head's complement of the same category, which no feature
+  distinguishes.  The first chart broke them by loop order, which
+  happened to attach low; broken by the agenda order alone, LAS fell to
+  0.524.  The active chart states the rule (attach as low as possible,
+  late closure) and is a point ahead of the first chart.  The rule is a
+  default where the model is silent; the feature that would decide it
+  (the head's class, lexicalised valency) is the next step.
 
 * **The symbolic corrections are worth three points of LAS and double the
   gaps filled** at relative-frequency weights (0.505 → 0.534; 15 → 29 of
