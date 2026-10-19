@@ -285,6 +285,7 @@ were infeasible) are kept for comparison, as are the first chart's.
 active chart, right side first, all 220 sentences:
 self-fit, relative-frequency weights    219/220  0.558  0.635   0.587     32/130    36/119
 5-fold CV, relative-frequency weights   218/220  0.543  0.619   0.571     29/129    31/119
+5-fold CV, fitted (Model B)             218/220  0.586  0.637   0.590     33/129    41/119
 
 active chart, two-sided chains, ties by late closure, sentences <= 32 tokens (2 excluded):
 self-fit, relative-frequency weights    217/218  0.560  0.639   0.594     32/127    36/117
@@ -335,10 +336,11 @@ How to read this:
   late closure) and is a point ahead of the first chart.  The rule is a
   default where the model is silent; the feature that would decide it
   (the head's class, lexicalised valency) is the next step.
-* **The fit carries over**: on the active chart Model B adds four and a
-  half points of LAS held out (0.543 → 0.588) and nine gaps (32 → 41 of
-  117), with the same support loss as before (8–13 training sentences
-  per fold at extraction, at most one by the gold-above-Z test).
+* **The fit carries over**: on all 220 sentences Model B adds four
+  points of LAS held out (0.543 → 0.586) and ten gaps (31 → 41 of 119),
+  with the same support loss as before (8–13 training sentences per fold
+  at extraction, at most one by the gold-above-Z test).  Its log Z is now
+  free of the gap-headed over-count (design document §9a).
 
 * **The symbolic corrections are worth three to four points of LAS and
   double the gaps filled** at relative-frequency weights (0.505 → 0.534

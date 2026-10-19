@@ -102,9 +102,8 @@ analyses the CGEL treebank (Reynolds, Ahmani & Schneider, EWT-CGEL):
   that fills it (`fill_gaps`).  Gap positions are taken from the input.
   Evaluated by labelled attachment (LAS), collapsed brackets and gap
   filling, five-fold CV on all 220 sentences: LAS 0.54 at
-  relative-frequency weights, 0.59 fitted (on the 218 of at most 32
-  tokens; the fit on all 220 is being rerun); gaps filled with the gold
-  material 31 of 119, fitted 41 of 117.  The chart is an active chart
+  relative-frequency weights, 0.59 fitted; gaps filled with the gold
+  material 31, fitted 41, of 119.  The chart is an active chart
   over structured labels (edge, label, derivation table) that builds each
   head's right side before its left, so every sentence parses; Viterbi
   ties are broken by a stated late-closure rule.  `cgel_coordgap_fit.py` is Model
