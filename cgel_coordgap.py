@@ -132,14 +132,17 @@ ROOT_CATS = frozenset({"Clause", "Coordination", "NP", "VP", "Nom", "AdjP",
                        "PP", "AdvP", "IntP", "Clause_rel", "DP"})
 MAXGAP = 2
 NOGAPS: Tuple[str, ...] = ()
-# functions that do not count towards a head's valency frame
-NONARG = frozenset({"Mod", "Supplement", "Flat", "Vocative", "Marker"})
-
-
-def frame_of(functions) -> Tuple[str, ...]:
-    """A head's subcategorisation frame: the sorted multiset of its
-    argument functions (everything but the non-argument ones)."""
-    return tuple(sorted(f for f in functions if f not in NONARG))
+# functions a head takes at most once.  The treebank never repeats Subj,
+# Det, Obj, Obj_ind, Obj_dir, PredComp, DisplacedSubj, ExtraposedSubj,
+# Particle, Comp_ind, Postnucleus or Head-Prenucleus on a head (Comp and
+# Prenucleus do repeat).  The chart tracks only the four that the parser
+# ever repeated in practice: tracking all twelve multiplies the side keys
+# (six times the run time on short sentences) and removes no further
+# repeat.
+ONCE = frozenset({"Subj", "Det", "Obj", "PredComp"})
+# head classes that license a subject: finite verbs and auxiliaries, modals,
+# and the inverted auxiliary's slot
+FINITE = frozenset({"V:fin", "V_aux:fin", "V_aux:mod", GAP})
 
 
 def gap_label(X: str) -> str:
@@ -150,12 +153,21 @@ def is_gap_label(D: str) -> bool:
     return D.startswith(GAP + "/")
 
 
+def binder_label(D: str) -> str:
+    """The gap category a dependent of chart category ``D`` would supply as
+    a binder: finiteness and marker features are not part of it."""
+    D = D.split("[")[0]
+    return "V_aux" if D.startswith("V_aux") else D
+
+
 def binder_category(b: Node) -> str:
     """The category of the material a binder supplies.  A head noun binder
     (``N`` or ``Nom``) supplies a nominal; a coordinated binder supplies its
     conjuncts' category."""
     if b.cat in ("N", "Nom", "N_pro") or b.edge in HEAD_EDGES:
         return "Nom"                       # a nominal head, fused heads included
+    if b.cat.startswith("V_aux"):
+        return "V_aux"                     # finiteness is not part of the gap
     if b.cat == "Coordination":
         conj = [c for c in b.children if c.edge == "Coordinate"]
         return conj[0].cat if conj else b.cat
@@ -192,12 +204,34 @@ def relabel_complement_takers(root: Node) -> int:
     return done
 
 
-def load_corpus(paths=None) -> List[Sentence]:
-    """The treebank with the complement-taker relabelling applied."""
+FINITENESS = {"VBZ": "fin", "VBD": "fin", "VBP": "fin", "MD": "mod",
+              "VB": "nonfin", "VBG": "nonfin", "VBN": "nonfin"}
+
+
+def relabel_finiteness(root: Node) -> int:
+    """Data intervention: verbs and auxiliaries carry their finiteness as
+    part of the class, read off the Penn tag every one of them has:
+    ``V:fin`` (VBZ, VBD, VBP), ``V:nonfin`` (VB, VBG, VBN), ``V_aux:mod``
+    (MD), and likewise for ``V_aux``.  The subject attaches at the clause
+    of the finite verb or auxiliary; this is what lets the chart license it
+    there and nowhere else."""
+    done = 0
+    for n in root.iter_nodes():
+        if n.cat in ("V", "V_aux") and n.is_lexical and n.pos in FINITENESS:
+            n.cat = f"{n.cat}:{FINITENESS[n.pos]}"
+            done += 1
+    return done
+
+
+def load_corpus(paths=None, finiteness: bool = True) -> List[Sentence]:
+    """The treebank with the data interventions applied: complement-taking
+    nouns and adjectives relabelled, and verb finiteness in the class."""
     paths = paths or sorted(CGEL.glob("*.cgel"))
     sents = [s for f in paths for s in parse_cgel_file(str(f))]
     for s in sents:
         relabel_complement_takers(s.root)
+        if finiteness:
+            relabel_finiteness(s.root)
     return sents
 
 
@@ -385,7 +419,6 @@ class Grammar:
         conj_total = conj_bare = ncoord = 0
         chains = defaultdict(Counter)      # (C, L) -> chain
         levels = defaultdict(Counter)      # (C, f, word|None) -> level cat
-        frames = defaultdict(Counter)      # C -> frame (argument multiset)
         self.skipped = Counter()
         for s in sentences:
             for ev in iter_events(s, markers):
@@ -397,7 +430,6 @@ class Grammar:
                         for fd in seq:
                             dep[(C, side)][fd] += 1
                     chains[(C, L)][chain] += 1
-                    frames[C][frame_of(f for f, _ in left + right)] += 1
                     for (f, w), cat in lv.items():
                         levels[(C, f, w)][cat] += 1
                 elif ev[0] == "leaf":
@@ -432,21 +464,6 @@ class Grammar:
         self.coord_cat = _smooth(coord_cat, alpha)
         self.p_more = (conj_total - ncoord + alpha) / (conj_total + 2 * alpha)
         self.p_bare = (conj_bare + alpha) / (conj_total + 2 * alpha)
-        # valency: P(frame | C) over the attested frames of C.  A head may
-        # take only an attested frame, so a partial frame on a side chain
-        # must be a sub-multiset of one; that bounds the chart (sub-frames
-        # of the attested frames, 83 for Clause) and makes an unattested
-        # frame off-support.
-        self.frame: Dict[str, Dict[Tuple[str, ...], float]] = {
-            C: _smooth(c, alpha) for C, c in frames.items()}
-        self.subframes: Dict[str, set] = {}
-        for C, d in self.frame.items():
-            subs = set()
-            for fr in d:
-                for k in range(len(fr) + 1):
-                    for comb in itertools.combinations(fr, k):
-                        subs.add(tuple(sorted(comb)))
-            self.subframes[C] = subs
         self.chain = {k: c.most_common(1)[0][0] for k, c in chains.items()}
         self.level = {k: c.most_common(1)[0][0] for k, c in levels.items()}
         self.cats = sorted({C for d in self.proj.values() for C in d
@@ -506,10 +523,6 @@ def feature_weights(g: "Grammar") -> Dict[tuple, float]:
       ("leaf", L)               bare token L used as a dependent
       ("stop", C, side)         end of a dependent sequence
       ("dep", C, side, f, D)    dependent (f, D) of a C head on that side
-      ("frame", C, frame)       the head of a C took exactly this multiset of
-                                argument functions (valency); only attested
-                                frames exist, and a chain may only build
-                                towards one
       ("mark", kind, word, X)   marker word marks X   (word-specific)
       ("markk", kind, X)        marker class marks X  (back-off)
       ("conj", "marked"|"bare") a non-initial conjunct with/without marker
@@ -531,9 +544,6 @@ def feature_weights(g: "Grammar") -> Dict[tuple, float]:
     for kind, d in g.mark_kind.items():
         for X, p in d.items():
             w[("markk", kind, X)] = lg(p)
-    for C, d in g.frame.items():
-        for fr, p in d.items():
-            w[("frame", C, fr)] = lg(p)
     w[("conj", "marked")] = lg(1 - g.p_bare)
     w[("conj", "bare")] = lg(g.p_bare)
     w[("coord", "more")] = lg(g.p_more)
@@ -555,9 +565,9 @@ class Chart:
     def __init__(self, g: "Grammar", ts: Sequence[str],
                  words: Optional[Sequence[str]] = None, maxgap: int = MAXGAP,
                  coord: bool = True, slash: bool = True, mode: str = "max",
-                 record: bool = False, frame: bool = True):
+                 record: bool = False, once: bool = True, finite: bool = True):
         self.g, self.ts = g, list(ts)
-        self.frame = frame
+        self.once, self.finite = once, finite
         self.n = len(self.ts)
         self.words = list(words) if words else [None] * self.n
         self.maxgap, self.coord, self.slash = maxgap, coord, slash
@@ -604,26 +614,32 @@ class Chart:
         edge = self.edge
         W = self.w
 
-        def attach(C, side, cell, m, inner, D_cell):
-            """Extend a left/right chain by one dependent constituent."""
+        def attach(C, side, cell, m, inner, D_cell, h):
+            """Extend a left/right chain by one dependent constituent of the
+            head at token ``h``."""
             emit = g.emit.get((C, side))
             if not emit:
                 return
+            head_class = ts[h]
             for dkey, _dv in D_cell.items():
                 D, gd, _bd = dkey
                 fs = emit.get(D)
                 if not fs:
                     continue
                 for ikey in inner:
-                    C0, g0, b0, fr0 = ikey
+                    C0, g0, b0, used0 = ikey
                     if C0 != C:
                         continue
                     for f, _p in fs:
+                        if self.once and f in ONCE and f in used0:
+                            continue                      # at most once per head
+                        if self.finite and f == "Subj" and head_class not in FINITE:
+                            continue                      # a finite head licenses it
                         gaps, binders = g0 + gd, b0
                         if f in BINDERS:
                             if gd:                        # a binder is gap-free
                                 continue
-                            X = D.split("[")[0]
+                            X = binder_label(D)
                             if X in gaps:
                                 gaps = _remove(gaps, X)   # fills a gap below
                             else:
@@ -635,13 +651,9 @@ class Chart:
                             gaps, binders = NOGAPS, NOGAPS
                         if len(gaps) > maxgap or len(binders) > maxgap:
                             continue
-                        if f in NONARG or not self.frame:
-                            fr = fr0
-                        else:
-                            fr = tuple(sorted(fr0 + (f,)))
-                            if fr not in g.subframes.get(C, ()):
-                                continue      # not building towards an attested frame
-                        edge(cell, (C, gaps, binders, fr),
+                        used = tuple(sorted(used0 + (f,))) \
+                            if (self.once and f in ONCE) else used0
+                        edge(cell, (C, gaps, binders, used),
                              [(inner, ikey), (D_cell, dkey)],
                              [("dep", C, side, f, D)], (m, dkey, f, ikey))
 
@@ -685,14 +697,10 @@ class Chart:
                             gaps, binders = _cancel(gl + rkey[1], bl + rkey[2])
                             if binders or len(gaps) > maxgap:
                                 continue
-                            feats = []
-                            if self.frame:
-                                ff = ("frame", C, tuple(sorted(frl + rkey[3])))
-                                if ff not in W:
-                                    continue          # an unattested frame
-                                feats = [ff]
+                            if set(frl) & set(rkey[3]):
+                                continue              # once-only on both sides
                             edge(cell, (C, gaps, NOGAPS),
-                                 [(left[i][h], lkey), (right[h][k], rkey)], feats,
+                                 [(left[i][h], lkey), (right[h][k], rkey)], [],
                                  ("head", h, lkey, rkey))
                 if ts[i] == "Sdr" and F >= 2 and g.markers != "dependent":
                     for (X, gx, _b) in list(arg[i + 1][k]):
@@ -738,14 +746,14 @@ class Chart:
                 for m in range(i + 1, h + 1):
                     if arg[i][m] and left[m][h]:
                         for C in {C0 for (C0, _, _, _) in left[m][h]}:
-                            attach(C, "L", left[i][h], m, left[m][h], arg[i][m])
+                            attach(C, "L", left[i][h], m, left[m][h], arg[i][m], h)
             # ---- right chains: head at h, dependents over (h, h + F] --------
             for h in range(0, n - F):
                 k = h + F + 1
                 for m in range(h + 1, k):
                     if arg[m][k] and right[h][m]:
                         for C in {C0 for (C0, _, _, _) in right[h][m]}:
-                            attach(C, "R", right[h][k], m, right[h][m], arg[m][k])
+                            attach(C, "R", right[h][k], m, right[h][m], arg[m][k], h)
 
         for key in arg[0][n]:
             C, gaps, _b = key
@@ -778,17 +786,19 @@ def _logaddexp(a: float, b: float) -> float:
 
 def parse(g: Grammar, ts: Sequence[str], words: Optional[Sequence[str]] = None,
           maxgap: int = MAXGAP, coord: bool = True, slash: bool = True,
-          frame: bool = True) -> Optional[Parse]:
+          once: bool = True, finite: bool = True) -> Optional[Parse]:
     """Viterbi parse of a lexical-category sequence (``GAP`` tokens included).
 
     ``coord=False`` switches the COORD schema off, ``slash=False`` the gap
-    feature (gaps are then tokens with no binding discipline) and
-    ``frame=False`` the valency frame feature; all three exist for
-    ablation.  See ``Chart`` for the cells and keys.
+    feature (gaps are then tokens with no binding discipline), ``once=False``
+    the at-most-once rule for the functions the treebank never repeats on a
+    head, and ``finite=False`` the licensing of a subject by a finite head;
+    all exist for ablation.  See ``Chart`` for the cells and keys.
     """
     if len(ts) == 0:
         return None
-    ch = Chart(g, ts, words, maxgap, coord, slash, mode="max", frame=frame).run()
+    ch = Chart(g, ts, words, maxgap, coord, slash, mode="max",
+               once=once, finite=finite).run()
     best, bkey, bcell, bkind = LOG0, None, None, None
     for cell, key, kind in ch.roots:
         if cell[key][0] > best:
@@ -977,7 +987,7 @@ def link_gaps(tree: Node) -> int:
             below.extend(og)
         for c, _ in per_child:
             if c.edge in BINDERS:
-                bind(below, c.cat.split("[")[0], c)
+                bind(below, binder_label(c.cat), c)
         if n.cat in NOMINAL:
             heads = [c for c in n.children if c.edge == "Head"]
             if heads and any(c.cat.split("[")[0] in CLAUSAL for c, _ in per_child):
@@ -1209,7 +1219,8 @@ def main() -> None:
     if args.ablate:
         for label, kw in (("COORD off", dict(coord=False)),
                           ("SLASH off", dict(slash=False)),
-                          ("FRAME off", dict(frame=False)),
+                          ("ONCE off", dict(once=False)),
+                          ("FINITE off", dict(finite=False)),
                           ("maxgap=1", dict(maxgap=1)),
                           ("markers=feature", dict(markers="feature")),
                           ("markers=dependent", dict(markers="dependent"))):

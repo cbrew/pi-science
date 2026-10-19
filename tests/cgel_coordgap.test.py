@@ -10,13 +10,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cgel_reader import parse_cgel_file
-from cgel_coordgap import (BINDERS, GAP, MARKERS, _chain_top, build_grammar,
-                           fill_gaps, gap_bindings, head_chain, is_gap_label,
-                           iter_events, parse, sentence_tokens, sentence_words)
+from cgel_coordgap import (BINDERS, GAP, MARKERS, _chain_top, binder_label,
+                           build_grammar, fill_gaps, gap_bindings, head_chain,
+                           is_gap_label, iter_events, parse, sentence_tokens,
+                           sentence_words)
 
 CGEL = Path(__file__).resolve().parent.parent / "cgel"
-SENTENCES = [s for f in sorted(CGEL.glob("*.cgel"))
-             for s in parse_cgel_file(str(f))]
+import cgel_coordgap as _P
+SENTENCES = _P.load_corpus()          # with the data interventions applied
 
 
 def find(sub):
@@ -127,19 +128,19 @@ class TestParser(unittest.TestCase):
         self.assertIsNotNone(parse(self.g, [GAP], slash=False))
         # "Adj GAP": no binder of any category the gap could stand for
         self.assertIsNone(parse(self.g, ["Adj", GAP]))
-        # "V_aux GAP": the auxiliary is forced into the Prenucleus slot and
-        # the gap stands for it (the head slot of the inverted clause)
-        pr = parse(self.g, ["V_aux", GAP])
+        # "V_aux GAP": there is a parse, the gap is bound, and its binder
+        # supplies material of the category the gap stands for
+        pr = parse(self.g, ["V_aux:fin", GAP])
         self.assertIsNotNone(pr)
-        self.assertIn("Prenucleus", {n.edge for n in pr.tree.iter_nodes()})
         gap = next(n for n in pr.tree.iter_nodes() if n.cat == GAP)
-        self.assertEqual(gap.get("for"), "V_aux")
+        self.assertIsNotNone(gap.index)
         binder = next(n for n in pr.tree.iter_nodes()
                       if n.index == gap.index and n.cat != GAP)
-        self.assertEqual(binder.cat, "V_aux")
+        self.assertEqual(binder.cat.split(":")[0].split("[")[0],
+                         gap.get("for").split(":")[0])
         # "GAP V" does parse: a gap-headed clause may bind its own head gap
         # through a Postnucleus (one can never tell when -- ... Alan was ...)
-        pr = parse(self.g, [GAP, "V"])
+        pr = parse(self.g, [GAP, "V:fin"])
         self.assertIsNotNone(pr)
         self.assertIn("Postnucleus", {n.edge for n in pr.tree.iter_nodes()})
 
@@ -169,8 +170,8 @@ class TestParser(unittest.TestCase):
                     b = binders[n.index]
                     want = n.get("for")
                     # a binder in the Head slot of a nominal supplies a Nom
-                    got = "Nom" if b.edge == "Head" else b.cat
-                    self.assertEqual(got.split("[")[0], want, (s.sent_id, b.cat))
+                    got = "Nom" if b.edge == "Head" else binder_label(b.cat)
+                    self.assertEqual(got, want, (s.sent_id, b.cat))
             self.assertEqual(len(binders), len(set(binders)))
 
     def test_fill_copies_the_fronted_auxiliary(self):

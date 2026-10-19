@@ -15,8 +15,8 @@ from cgel_coordgap_fit import (fit, gold_features, gold_score, gradient_check,
                                inside, loglik, outside)
 
 CGEL = Path(__file__).resolve().parent.parent / "cgel"
-SENTENCES = [s for f in sorted(CGEL.glob("*.cgel"))
-             for s in parse_cgel_file(str(f))]
+import cgel_coordgap as _P
+SENTENCES = _P.load_corpus()          # with the data interventions applied
 
 
 def find(sub):
