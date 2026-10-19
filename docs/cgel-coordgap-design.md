@@ -514,6 +514,8 @@ features before fitting can act on them.
 Cost: inside and outside each cost what a Viterbi pass does, plus the
 recorded edges; training is therefore restricted to sentences of at most
 `--maxtok` tokens (16 by default), while evaluation uses every sentence.
+Result (5-fold CV, 12 epochs): LAS 0.506 → 0.523, UAS 0.572 → 0.592,
+coordination brackets 47 → 52 of 129, gaps filled 14 → 19 of 119.
 
 ## 10. Switches
 

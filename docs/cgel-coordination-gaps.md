@@ -237,7 +237,20 @@ document §9); the devices of §3, §4 and §6 are the constraints the model
 is normalised over, and the overlapping features are no longer a double
 count because they are fitted jointly against one normaliser.  The
 numbers in §8 that say "relative-frequency weights" are the unfitted
-model; "fitted" is Model B.  FIT-RESULTS
+model; "fitted" is Model B.
+
+Fitting on the training sentences of at most 16 tokens (12 epochs, Adam
+step 0.05, L2 0.1; 71–80 sentences per fold in the support, 11–16 left
+out by extraction and 0–2 by the support check) raises the mean held-in
+conditional log-likelihood by about 1.4 nats per sentence and, on *every*
+held-out sentence, moves the headline measures in the right direction:
+LAS 0.506 → 0.523, UAS 0.572 → 0.592, coordination brackets 47 → 52 of
+129, gaps filled with the gold material 14 → 19 of 119, sentences with
+every dependency right 4 → 10 (`python3 cgel_coordgap_fit.py --fit`,
+about 9 minutes).  Modest, as it must be: the fit re-weights the local
+events the chart already has, and the two errors that dominate, valency
+and the choice between binders, need features the chart does not yet
+carry.
 
 A constraint that was also tried, "a binder is the outermost dependent on
 its side" (true of every Prenucleus and Postnucleus in the corpus),
@@ -273,13 +286,17 @@ cgel_coordgap, 5-fold CV          218/220  0.505  0.568   0.587     48/129    15
   maxgap = 1                      218/220  0.506  0.570   0.585     48/129    17/119
   markers = feature               214/220  0.506  0.575   0.584     47/126    18/111
   markers = dependent             218/220  0.493  0.560   0.576     30/129    21/119
+fitted, Model B over the chart   218/220  0.523  0.592   0.593     52/129    19/119
+  (its own run of the folds,
+   unfitted on the same folds)   218/220  0.506  0.572   0.587     47/129    14/119
 
 5-fold CV LAS by sentence type:  coordination only 0.61 · coordination+Sdr 0.59 ·
   Sdr only 0.49 · plain 0.48 · gap+Sdr 0.44 · coordination+gap+Sdr 0.46 ·
   gap only 0.39 · coordination+gap 0.39
 ```
 
-(`python3 cgel_coordgap.py --eval --ablate`, about 7 minutes.)
+(`python3 cgel_coordgap.py --eval --ablate`, about 7 minutes; the fitted
+rows from `python3 cgel_coordgap_fit.py --fit`, §7.)
 
 How to read this honestly:
 
